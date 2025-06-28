@@ -1,4 +1,4 @@
-# MinMEETs – AI Meeting Intelligence Agent
+# MineMEETs – AI Meeting Intelligence Agent
 
 MinMEETs is your silent meeting analyst. It listens, learns, and summarizes your meetings, extracting key action items, decisions, and follow-ups. Built using Whisper, vector DBs, and GROQ's blazing-fast LLM APIs, MinMEETs also mails summaries and transcripts to your team.
 
