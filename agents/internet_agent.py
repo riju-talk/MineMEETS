@@ -1,81 +1,95 @@
-"""Internet Agent for performing web searches and gathering information."""
-from typing import Dict, Any, List, Optional
+# agents/internet_agent.py
+from typing import Dict, Any, Optional, List
 from .base_agent import BaseAgent, AgentResponse
-from langchain_community.utilities import GoogleSearchAPIWrapper
-from langchain.tools import Tool
-from langchain.agents import initialize_agent, Tool, AgentType
 import os
+import asyncio
+import logging
+from duckduckgo_search import ddg  # pip install duckduckgo_search
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig, pipeline
 
 class InternetAgent(BaseAgent):
-    """Agent for performing web searches and gathering information."""
-    
+    """Internet agent using DuckDuckGo for search and a local HF LLM for summarization."""
+
     def __init__(self):
-        """Initialize the Internet agent with search capabilities."""
-        super().__init__(
-            name="internet_agent",
-            description="Performs web searches to gather additional information"
+        super().__init__(name="internet_agent", description="Performs web searches using DuckDuckGo and summarizes results with a local LLM.")
+        # model config
+        model_id = os.getenv("LLM_MODEL_ID", "unsloth/Meta-Llama-3-8B-Instruct-bnb-4bit")
+        max_new_tokens = int(os.getenv("LLM_MAX_NEW_TOKENS", "256"))
+        temperature = float(os.getenv("LLM_TEMPERATURE", "0.0"))
+
+        bnb_cfg = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16
         )
-        self.search = GoogleSearchAPIWrapper(google_api_key=os.getenv("GOOGLE_API_KEY"),
-                                           google_cse_id=os.getenv("GOOGLE_CSE_ID"))
-        self.tools = [
-            Tool(
-                name="Search",
-                func=self.search.run,
-                description="Useful for when you need to answer questions about current events or find recent information"
-            )
-        ]
-        self.agent = initialize_agent(
-            self.tools,
-            ChatOpenAI(temperature=0, model_name="gpt-4"),
-            agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
-            verbose=True
+
+        # Load tokenizer & model
+        self.tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=True)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            device_map="auto",
+            quantization_config=bnb_cfg,
+            torch_dtype=torch.bfloat16
         )
-    
+        self.gen_pipe = pipeline(
+            "text-generation",
+            model=self.model,
+            tokenizer=self.tokenizer,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            do_sample=False,
+            return_full_text=False
+        )
+
+    def _run_gen_sync(self, prompt: str) -> str:
+        res = self.gen_pipe(prompt)
+        return res[0].get("generated_text", "") if res else ""
+
+    async def _run_gen(self, prompt: str) -> str:
+        return await asyncio.to_thread(self._run_gen_sync, prompt)
+
     async def process(self, query: str, context: Optional[Dict[str, Any]] = None) -> AgentResponse:
-        """Process a search query and return results.
-        
-        Args:
-            query: The search query or question
-            context: Additional context for the search
-            
+        """
+        Perform a web search with DuckDuckGo and summarize top results.
+
         Returns:
-            AgentResponse with search results
+          AgentResponse with fields: answer (string), sources (list of dicts with title/url/snippet)
         """
         try:
-            # Add context to the query if available
-            if context:
-                if "meeting_context" in context:
-                    query = f"{query} (Meeting context: {context['meeting_context']})"
-                
-                if "search_type" in context:
-                    query = f"{context['search_type']}: {query}"
-            
-            # Perform the search
-            result = self.agent.run(query)
-            
-            return AgentResponse(
-                success=True,
-                content={
-                    "answer": result,
-                    "sources": [{"type": "web_search", "query": query}]
-                }
+            # Build a search query; optionally include meeting context for more targeted search
+            if context and "meeting_context" in context:
+                meeting_meta = context["meeting_context"]
+                query = f"{query} (Meeting context: {meeting_meta})"
+
+            # DuckDuckGo search (synchronous)
+            # ddg returns list of dicts: {"title","href","body"}
+            results = ddg(query, max_results=5) or []
+            if not results:
+                return AgentResponse(success=True, content={"answer": "", "sources": []})
+
+            # Build a context string containing titles and snippets
+            snippet_texts = []
+            sources = []
+            for r in results:
+                title = r.get("title") or ""
+                href = r.get("href") or r.get("url") or ""
+                body = r.get("body") or ""
+                snippet = f"{title}\n{body}\nURL: {href}"
+                snippet_texts.append(snippet)
+                sources.append({"title": title, "url": href, "snippet": body})
+
+            context_for_model = "\n\n---\n\n".join(snippet_texts)
+            prompt = (
+                "You are an assistant that summarizes search results. "
+                "Given the following search snippets, produce a concise answer to the user's query and list top sources.\n\n"
+                f"Search snippets:\n{context_for_model}\n\nQuestion: {query}\n\nAnswer (brief):"
             )
-            
+
+            answer = await self._run_gen(prompt)
+            return AgentResponse(success=True, content={"answer": answer.strip(), "sources": sources})
+
         except Exception as e:
-            return AgentResponse(
-                success=False,
-                content=f"Error performing search: {str(e)}"
-            )
-    
-    async def verify_information(self, statement: str, context: Optional[Dict[str, Any]] = None) -> AgentResponse:
-        """Verify a statement by searching for supporting or contradicting information.
-        
-        Args:
-            statement: The statement to verify
-            context: Additional context for the verification
-            
-        Returns:
-            AgentResponse with verification results
-        """
-        query = f"Verify the following statement and find reliable sources: {statement}"
-        return await self.process(query, {"search_type": "Fact check", **context})
+            self.logger.exception("InternetAgent failed")
+            return AgentResponse(success=False, content=f"Error performing internet search: {e}", metadata={"error": str(e)})
