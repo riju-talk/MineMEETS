@@ -1,195 +1,145 @@
-# backend/vector_store/pinecone_store.py
 import os
 import time
-from typing import List, Dict, Optional, Iterable, Tuple
-from pinecone import Pinecone, ServerlessSpec
+import logging
+import threading
+from typing import Any, Dict, List, Optional, Type, TypeVar
+
+from pydantic import BaseModel, Field, validator
+from pinecone import Pinecone, ServerlessSpec, PodSpec
 from langchain_pinecone import PineconeVectorStore
-from langchain.embeddings import HuggingFaceEmbeddings
+from langchain.schema import BaseRetriever, Document
+from langchain.embeddings.base import Embeddings
 
-# ---- Singleton metaclass ----
-class _Singleton(type):
-    _instances: Dict[Tuple[str, str], "PineconeDB"] = {}
-    def __call__(cls, *args, **kwargs):
-        # one instance per (index_name, namespace)
-        key = (kwargs.get("index_name") or os.getenv("PINECONE_INDEX_NAME", "mine-meets"),
-               kwargs.get("namespace") or os.getenv("PINECONE_NAMESPACE", "default"))
-        if key not in cls._instances:
-            cls._instances[key] = super().__call__(*args, **kwargs)
-        return cls._instances[key]
+logger = logging.getLogger(__name__)
+T = TypeVar('T', bound='PineconeDB')
 
-class PineconeDB(metaclass=_Singleton):
-    """
-    Pinecone DB wrapper:
-    - Creates index if missing (serverless).
-    - Uses high-dim embeddings (default BGE-large 1024-d).
-    - Upsert is idempotent (skips existing ids).
-    - Provides LangChain VectorStore + retriever helper.
-    """
+class PineconeConfig(BaseModel):
+    api_key: str = Field(..., description="Pinecone API key")
+    environment: Optional[str] = Field(None, description="Pinecone environment")
+    index_name: str = Field("meetings", description="Name of the Pinecone index")
+    dimension: int = Field(1536, description="Dimension of the embeddings")
+    metric: str = Field("cosine", description="Distance metric")
+    serverless: bool = Field(False, description="Use serverless index")
+    cloud: Optional[str] = Field("aws", description="Cloud provider for serverless")
+    region: Optional[str] = Field("us-west-2", description="Region for serverless")
+    pod_type: Optional[str] = Field("starter", description="Pod type for pod-based index")
+    timeout: int = Field(60, description="Timeout for index readiness in seconds")
+    max_retries: int = Field(3, description="Number of retries for connecting")
 
-    def __init__(
-        self,
-        api_key: Optional[str] = None,
-        index_name: Optional[str] = None,
-        namespace: Optional[str] = None,
-        cloud: str = None,
-        region: str = None,
-        embedding_model: str = None,
-        embedding_device: str = "cpu",
-        metric: str = "cosine",
-        dim: Optional[int] = None,
-    ):
-        # --- Config from env w/ sane defaults ---
-        self.api_key     = api_key     or os.getenv("PINECONE_API_KEY")
-        self.index_name  = index_name  or os.getenv("PINECONE_INDEX_NAME", "mine-meets")
-        self.namespace   = namespace   or os.getenv("PINECONE_NAMESPACE", "default")
-        self.cloud       = cloud       or os.getenv("PINECONE_CLOUD", "aws")
-        self.region      = region      or os.getenv("PINECONE_REGION", "ap-southeast-1")  # SG is good for India
-        self.metric      = metric      or os.getenv("PINECONE_METRIC", "cosine")
+    @validator('metric')
+    def check_metric(cls, v):
+        valid = {"cosine", "dotproduct", "euclidean"}
+        if v.lower() not in valid:
+            raise ValueError(f"metric must be one of {valid}")
+        return v.lower()
 
-        # High-dimensional default (1024)
-        self.embedding_model = embedding_model or os.getenv("EMBEDDING_MODEL", "BAAI/bge-large-en-v1.5")
-        self.dim             = int(dim or os.getenv("EMBEDDING_DIM", "1024"))
+class PineconeDB:
+    _instance: Optional['PineconeDB'] = None
+    _lock = threading.Lock()
 
-        if not self.api_key:
-            raise ValueError("PINECONE_API_KEY is required")
+    def __new__(cls: Type[T], *args, **kwargs) -> T:
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = super().__new__(cls)
+                cls._instance._initialized = False
+                cls._instance._config = PineconeConfig(
+                    api_key=os.getenv("PINECONE_API_KEY", ""),
+                    environment=os.getenv("PINECONE_ENVIRONMENT"),
+                    index_name=os.getenv("PINECONE_INDEX", "meetings"),
+                    dimension=int(os.getenv("EMBEDDING_DIM", "1536")),
+                    metric=os.getenv("PINECONE_METRIC", "cosine"),
+                    serverless=os.getenv("PINECONE_SERVERLESS", "").lower() == "true",
+                    cloud=os.getenv("PINECONE_CLOUD", "aws"),
+                    region=os.getenv("PINECONE_REGION", "us-west-2"),
+                    pod_type=os.getenv("PINECONE_POD_TYPE", "starter"),
+                    timeout=int(os.getenv("PINECONE_TIMEOUT", "60")),
+                    max_retries=int(os.getenv("PINECONE_MAX_RETRIES", "3")),
+                )
+        return cls._instance
 
-        # --- Embeddings (HF, high-dim) ---
-        self.embeddings = HuggingFaceEmbeddings(
-            model_name=self.embedding_model,
-            model_kwargs={"device": embedding_device},
-            encode_kwargs={"normalize_embeddings": True},  # cosine works best when normalized
-        )
+    def __init__(self) -> None:
+        if not self._initialized:
+            with self._lock:
+                if not self._initialized:
+                    self._init_client_and_index()
+                    self._initialized = True
 
-        # --- Pinecone client (v5) ---
-        self.pc = Pinecone(api_key=self.api_key)
+    def _init_client_and_index(self) -> None:
+        if not self._config.api_key:
+            raise ValueError("Missing PINECONE_API_KEY")
 
-        # --- Create index if needed ---
-        self._ensure_index()
-
-        # --- Connected index handle ---
-        self.index = self.pc.Index(self.index_name)
-
-        # --- LangChain VectorStore helper (lazy)
-        self._vector_store = None
-
-    # ---------- Index lifecycle ----------
-    def _ensure_index(self):
-        names = self.pc.list_indexes().names()
-        if self.index_name in names:
-            # already exists; sanity check dimension & metric?
-            return
-
-        self.pc.create_index(
-            name=self.index_name,
-            dimension=self.dim,
-            metric=self.metric,
-            spec=ServerlessSpec(cloud=self.cloud, region=self.region),
-        )
-
-        # Wait until ready
-        while True:
-            desc = self.pc.describe_index(self.index_name)
-            if getattr(desc, "status", {}).get("ready"):
+        for attempt in range(self._config.max_retries + 1):
+            try:
+                self._client = Pinecone(
+                    api_key=self._config.api_key,
+                    environment=self._config.environment
+                )
+                logger.info("Connected to Pinecone service")
                 break
-            time.sleep(1)
+            except Exception as e:
+                logger.warning(f"Connection attempt {attempt + 1} failed: {e}")
+                if attempt < self._config.max_retries:
+                    time.sleep((2 ** attempt) * 2)
+                else:
+                    raise RuntimeError("Failed to connect to Pinecone") from e
 
-    # ---------- LangChain VectorStore ----------
-    def get_vector_store(self) -> PineconeVectorStore:
-        if self._vector_store is None:
-            self._vector_store = PineconeVectorStore(
-                index_name=self.index_name,
-                namespace=self.namespace,
-                embedding=self.embeddings,
-                text_key="text",  # we will store the raw text under metadata["text"]
+        # Create index if missing
+        existing = self._client.list_indexes()
+        if self._config.index_name not in existing:
+            logger.info(f"Creating index: {self._config.index_name}")
+            spec = (ServerlessSpec(cloud=self._config.cloud, region=self._config.region)
+                    if self._config.serverless else
+                    PodSpec(environment=self._config.environment, pod_type=self._config.pod_type))
+            self._client.create_index(
+                name=self._config.index_name,
+                dimension=self._config.dimension,
+                metric=self._config.metric,
+                spec=spec
             )
-        return self._vector_store
-
-    def as_retriever(self, k: int = 5):
-        return self.get_vector_store().as_retriever(search_kwargs={"k": k})
-
-    # ---------- Upsert (idempotent) ----------
-    def upsert_texts(
-        self,
-        texts: List[str],
-        metadatas: Optional[List[Dict]] = None,
-        ids: Optional[List[str]] = None,
-        batch_size: int = 128,
-        skip_if_exists: bool = True,
-    ) -> int:
-        """
-        Upsert texts as vectors with optional metadata and IDs.
-        - If `skip_if_exists=True`, existing IDs are detected and skipped (no overwrite).
-        Returns number of new records actually upserted.
-        """
-        if not texts:
-            return 0
-        if metadatas and len(metadatas) != len(texts):
-            raise ValueError("metadatas length must match texts length")
-        if ids and len(ids) != len(texts):
-            raise ValueError("ids length must match texts length")
-
-        # build default metadatas and ids
-        if metadatas is None:
-            metadatas = [{} for _ in texts]
-        if ids is None:
-            # deterministic ids from namespace + ordinal
-            ids = [f"{self.namespace}-{i}" for i in range(len(texts))]
-
-        # optional dedupe by checking existing IDs
-        new_texts, new_metas, new_ids = texts, metadatas, ids
-        if skip_if_exists:
-            fetch = self.index.fetch(ids=ids, namespace=self.namespace)
-            existing = set((fetch or {}).get("vectors", {}).keys())
-            if existing:
-                new_texts, new_metas, new_ids = [], [], []
-                for t, m, _id in zip(texts, metadatas, ids):
-                    if _id not in existing:
-                        new_texts.append(t)
-                        m = dict(m or {})
-                        m.setdefault("text", t)  # ensure text is present for LangChain text_key
-                        new_metas.append(m)
-                        new_ids.append(_id)
+            # Wait for readiness
+            start = time.time()
+            while time.time() - start < self._config.timeout:
+                status = self._client.describe_index(self._config.index_name).status
+                if status.get("ready", False):
+                    logger.info(f"Index {self._config.index_name} ready")
+                    break
+                time.sleep(5)
             else:
-                # add text to metadata
-                new_metas = [dict(m, **{"text": t}) for t, m in zip(texts, metadatas)]
+                raise TimeoutError(f"Index {self._config.index_name} not ready in time")
 
-        if not new_texts:
-            return 0
+        self._index = self._client.Index(self._config.index_name)
 
-        # embed and upsert in batches
-        total = 0
-        for i in range(0, len(new_texts), batch_size):
-            chunk_texts = new_texts[i : i + batch_size]
-            chunk_ids   = new_ids[i : i + batch_size]
-            chunk_meta  = new_metas[i : i + batch_size]
-            vecs = self.embeddings.embed_documents(chunk_texts)  # List[List[float]]
-
-            # Pinecone upsert format
-            vectors = [
-                {"id": _id, "values": v, "metadata": m}
-                for _id, v, m in zip(chunk_ids, vecs, chunk_meta)
-            ]
-            self.index.upsert(vectors=vectors, namespace=self.namespace)
-            total += len(vectors)
-
-        return total
-
-    # ---------- Query (raw) ----------
-    def query(self, query_text: str, top_k: int = 5):
-        qvec = self.embeddings.embed_query(query_text)
-        res = self.index.query(
-            vector=qvec,
-            top_k=top_k,
-            include_metadata=True,
-            namespace=self.namespace,
+    def get_retriever(self, embeddings: Embeddings, namespace: Optional[str] = None, k: int = 4, score_threshold: Optional[float] = None) -> BaseRetriever:
+        vs = PineconeVectorStore(
+            index=self._index,
+            embedding=embeddings,
+            namespace=namespace
         )
-        # normalize a convenient structure
-        matches = []
-        for m in getattr(res, "matches", []):
-            matches.append({
-                "id": m.id,
-                "score": m.score,
-                "text": (m.metadata or {}).get("text", ""),
-                "metadata": m.metadata or {},
-            })
-        return matches
+        if score_threshold is not None:
+            return vs.as_retriever(search_type="similarity_score_threshold", search_kwargs={"k": k, "score_threshold": score_threshold})
+        else:
+            return vs.as_retriever(search_kwargs={ "k": k })
+
+    def upsert_documents(self, documents: List[Document], embeddings: Embeddings, namespace: Optional[str] = None, batch_size: int = 64) -> List[str]:
+        vs = PineconeVectorStore(
+            index=self._index,
+            embedding=embeddings,
+            namespace=namespace
+        )
+        return vs.add_documents(documents=documents, batch_size=batch_size)
+
+    def delete_vectors(self, ids: Optional[List[str]] = None, namespace: Optional[str] = None, delete_all: bool = False, filter: Optional[Dict[str, Any]] = None) -> None:
+        vs = PineconeVectorStore(index=self._index, embedding=None, namespace=namespace)
+        vs.delete(ids=ids, delete_all=delete_all, filter=filter)
+
+    def get_index_stats(self, namespace: Optional[str] = None) -> Dict[str, Any]:
+        return self._client.describe_index_stats(name=self._config.index_name, namespace=namespace)
+
+    def __del__(self) -> None:
+        try:
+            del self._index
+            del self._client
+        except Exception:
+            pass
+        finally:
+            self._initialized = False

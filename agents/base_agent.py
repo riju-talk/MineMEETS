@@ -1,10 +1,14 @@
 # backend/agents/base_agent.py
 """Base agent class for all specialized agents with lifecycle, logging, and sync helpers."""
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, TypeVar, Generic, Callable, Type, Union
 import asyncio
 import logging
+import time
 from pydantic import BaseModel, Field
+
+T = TypeVar('T')
+R = TypeVar('R')
 
 
 class AgentResponse(BaseModel):
@@ -73,9 +77,16 @@ class BaseAgent(ABC):
     async def _process_with_timeout(self, *args, timeout: Optional[float] = None, **kwargs) -> AgentResponse:
         """Internal wrapper to run process() with optional timeout."""
         t = timeout if timeout is not None else self._timeout
-        if t:
-            return await asyncio.wait_for(self.process(*args, **kwargs), timeout=t)
-        return await self.process(*args, **kwargs)
+        try:
+            if t:
+                return await asyncio.wait_for(self.process(*args, **kwargs), timeout=t)
+            return await self.process(*args, **kwargs)
+        except asyncio.TimeoutError:
+            self.logger.error(f"Process timed out after {t} seconds")
+            return self.failure_response("Operation timed out")
+        except Exception as e:
+            self.logger.error(f"Process failed: {str(e)}", exc_info=True)
+            return self.failure_response(f"Internal error: {str(e)}")
 
     def run_sync(self, *args, timeout: Optional[float] = None, **kwargs) -> AgentResponse:
         """
@@ -128,6 +139,55 @@ class BaseAgent(ABC):
 
     # synchronous call operator not provided intentionally to avoid ambiguity;
     # keep __call__ async so agents behave predictably in async code.
-    async def __call__(self, *args, **kwargs) -> AgentResponse:
-        """Make the agent awaitable/callable in async code."""
+    async def __call__(self, *args: Any, **kwargs: Any) -> AgentResponse:
+        """Make the agent awaitable/callable in async code.
+        
+        Args:
+            *args: Positional arguments to pass to process()
+            **kwargs: Keyword arguments to pass to process()
+            
+        Returns:
+            AgentResponse: The result of process()
+        """
         return await self.process(*args, **kwargs)
+    
+    async def process_with_logging(self, input_data: Any, context: Optional[Dict[str, Any]] = None) -> AgentResponse:
+        """Process input with logging and timing.
+        
+        Args:
+            input_data: Input data to process
+            context: Optional context dictionary
+            
+        Returns:
+            AgentResponse: The result of processing
+        """
+        start = time.time()
+        try:
+            self.logger.info(f"Starting processing in {self.name}")
+            resp = await self.process(input_data, context)
+            elapsed = time.time() - start
+            status = "succeeded" if resp.success else "failed"
+            self.logger.info(f"{self.name} {status} in {elapsed:.2f}s")
+            return resp
+        except Exception as e:
+            elapsed = time.time() - start
+            self.logger.error(f"{self.name} failed after {elapsed:.2f}s: {str(e)}", exc_info=True)
+            return self.failure_response(f"Processing failed: {str(e)}")
+    
+    @classmethod
+    def validate_config(cls, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate agent configuration.
+        
+        Args:
+            config: Configuration dictionary to validate
+            
+        Returns:
+            Dict[str, Any]: Validated configuration
+            
+        Raises:
+            ValueError: If configuration is invalid
+        """
+        if not isinstance(config, dict):
+            raise ValueError("Configuration must be a dictionary")
+        return config
+
