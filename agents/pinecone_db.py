@@ -2,16 +2,16 @@ import os
 import time
 import logging
 import threading
-from typing import Any, Dict, List, Optional, Type, TypeVar
+from typing import Any, Dict, List, Optional, Type
 
 from pydantic import BaseModel, Field, validator
-from pinecone import Pinecone, ServerlessSpec, PodSpec
+import pinecone
 from langchain_pinecone import PineconeVectorStore
 from langchain.schema import BaseRetriever, Document
 from langchain.embeddings.base import Embeddings
 
 logger = logging.getLogger(__name__)
-T = TypeVar('T', bound='PineconeDB')
+
 
 class PineconeConfig(BaseModel):
     api_key: str = Field(..., description="Pinecone API key")
@@ -37,7 +37,7 @@ class PineconeDB:
     _instance: Optional['PineconeDB'] = None
     _lock = threading.Lock()
 
-    def __new__(cls: Type[T], *args, **kwargs) -> T:
+    def __new__(cls: Type['PineconeDB'], *args, **kwargs) -> 'PineconeDB':
         with cls._lock:
             if cls._instance is None:
                 cls._instance = super().__new__(cls)
@@ -45,13 +45,13 @@ class PineconeDB:
                 cls._instance._config = PineconeConfig(
                     api_key=os.getenv("PINECONE_API_KEY", ""),
                     environment=os.getenv("PINECONE_ENVIRONMENT"),
-                    index_name=os.getenv("PINECONE_INDEX", "meetings"),
-                    dimension=int(os.getenv("EMBEDDING_DIM", "1536")),
+                    index_name=os.getenv("PINECONE_INDEX", "mine-meets"),  # from screenshot
+                    dimension=int(os.getenv("EMBEDDING_DIM", "1024")),    # from screenshot or pinecone model config
                     metric=os.getenv("PINECONE_METRIC", "cosine"),
-                    serverless=os.getenv("PINECONE_SERVERLESS", "").lower() == "true",
-                    cloud=os.getenv("PINECONE_CLOUD", "aws"),
-                    region=os.getenv("PINECONE_REGION", "us-west-2"),
-                    pod_type=os.getenv("PINECONE_POD_TYPE", "starter"),
+                    serverless=True,  # serverless index per screenshot
+                    cloud="aws",
+                    region="us-east-1",  # match screenshot
+                    pod_type=None,
                     timeout=int(os.getenv("PINECONE_TIMEOUT", "60")),
                     max_retries=int(os.getenv("PINECONE_MAX_RETRIES", "3")),
                 )
@@ -68,38 +68,30 @@ class PineconeDB:
         if not self._config.api_key:
             raise ValueError("Missing PINECONE_API_KEY")
 
-        for attempt in range(self._config.max_retries + 1):
-            try:
-                self._client = Pinecone(
-                    api_key=self._config.api_key,
-                    environment=self._config.environment
-                )
-                logger.info("Connected to Pinecone service")
-                break
-            except Exception as e:
-                logger.warning(f"Connection attempt {attempt + 1} failed: {e}")
-                if attempt < self._config.max_retries:
-                    time.sleep((2 ** attempt) * 2)
-                else:
-                    raise RuntimeError("Failed to connect to Pinecone") from e
+        pinecone.init(api_key=self._config.api_key, environment=self._config.environment)
 
-        # Create index if missing
-        existing = self._client.list_indexes()
+        # Index create/connect (v3+ usage: always handle existing)
+        existing = pinecone.list_indexes()
         if self._config.index_name not in existing:
             logger.info(f"Creating index: {self._config.index_name}")
-            spec = (ServerlessSpec(cloud=self._config.cloud, region=self._config.region)
-                    if self._config.serverless else
-                    PodSpec(environment=self._config.environment, pod_type=self._config.pod_type))
-            self._client.create_index(
+            pinecone.create_index(
                 name=self._config.index_name,
                 dimension=self._config.dimension,
                 metric=self._config.metric,
-                spec=spec
+                spec={
+                    "serverless": {
+                        "cloud": self._config.cloud,
+                        "region": self._config.region,
+                        "capacity": "starter"  # safely default starter plan
+                    },
+                    "model": "llama-text-embed-v2"  # from your screenshot
+                }
             )
             # Wait for readiness
             start = time.time()
             while time.time() - start < self._config.timeout:
-                status = self._client.describe_index(self._config.index_name).status
+                desc = pinecone.describe_index(self._config.index_name)
+                status = desc.get("status", {})
                 if status.get("ready", False):
                     logger.info(f"Index {self._config.index_name} ready")
                     break
@@ -107,7 +99,7 @@ class PineconeDB:
             else:
                 raise TimeoutError(f"Index {self._config.index_name} not ready in time")
 
-        self._index = self._client.Index(self._config.index_name)
+        self._index = pinecone.Index(self._config.index_name)
 
     def get_retriever(self, embeddings: Embeddings, namespace: Optional[str] = None, k: int = 4, score_threshold: Optional[float] = None) -> BaseRetriever:
         vs = PineconeVectorStore(
