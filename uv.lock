@@ -160,15 +160,6 @@ wheels = [
 ]
 
 [[package]]
-name = "dnspython"
-version = "2.8.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/8c/8b/57666417c0f90f08bcafa776861060426765fdb422eb10212086fb811d26/dnspython-2.8.0.tar.gz", hash = "sha256:181d3c6996452cb1189c4046c61599b84a5a86e099562ffde77d26984ff26d0f", size = 368251, upload-time = "2025-09-07T18:58:00.022Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ba/5a/18ad964b0086c6e62e2e7500f7edc89e3faa45033c71c1893d34eed2b2de/dnspython-2.8.0-py3-none-any.whl", hash = "sha256:01d9bbc4a2d76bf0db7c1f729812ded6d912bd318d3b1cf81d30c0f845dbf3af", size = 331094, upload-time = "2025-09-07T18:57:58.071Z" },
-]
-
-[[package]]
 name = "duckduckgo-search"
 version = "8.1.1"
 source = { registry = "https://pypi.org/simple" }
@@ -441,19 +432,6 @@ wheels = [
 ]
 
 [[package]]
-name = "loguru"
-version = "0.7.3"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32'" },
-    { name = "win32-setctime", marker = "sys_platform == 'win32'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/3a/05/a1dae3dffd1116099471c643b8924f5aa6524411dc6c63fdae648c4f1aca/loguru-0.7.3.tar.gz", hash = "sha256:19480589e77d47b8d85b2c827ad95d49bf31b0dcde16593892eb51dd18706eb6", size = 63559, upload-time = "2024-12-06T11:20:56.608Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/0c/29/0348de65b8cc732daa3e33e67806420b2ae89bdce2b04af740289c5c6c8c/loguru-0.7.3-py3-none-any.whl", hash = "sha256:31a33c10c8e1e10422bfd431aeb5d351c7cf7fa671e3c4df004162264b28220c", size = 61595, upload-time = "2024-12-06T11:20:54.538Z" },
-]
-
-[[package]]
 name = "lxml"
 version = "6.0.2"
 source = { registry = "https://pypi.org/simple" }
@@ -606,8 +584,10 @@ dependencies = [
     { name = "numpy" },
     { name = "ollama" },
     { name = "openai-whisper" },
-    { name = "pinecone-client" },
+    { name = "pinecone" },
     { name = "pydub" },
+    { name = "pypdf2" },
+    { name = "python-docx" },
     { name = "python-dotenv" },
     { name = "requests" },
     { name = "sentence-transformers" },
@@ -622,8 +602,10 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.3.4" },
     { name = "ollama", specifier = ">=0.6.0" },
     { name = "openai-whisper", specifier = ">=20250625" },
-    { name = "pinecone-client", specifier = "==2.2.4" },
+    { name = "pinecone", specifier = ">=7.3.0" },
     { name = "pydub", specifier = ">=0.25.1" },
+    { name = "pypdf2" },
+    { name = "python-docx" },
     { name = "python-dotenv", specifier = ">=1.1.1" },
     { name = "requests" },
     { name = "sentence-transformers", specifier = ">=5.1.1" },
@@ -1086,23 +1068,42 @@ wheels = [
 ]
 
 [[package]]
-name = "pinecone-client"
-version = "2.2.4"
+name = "pinecone"
+version = "7.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "dnspython" },
-    { name = "loguru" },
-    { name = "numpy" },
+    { name = "certifi" },
+    { name = "pinecone-plugin-assistant" },
+    { name = "pinecone-plugin-interface" },
     { name = "python-dateutil" },
-    { name = "pyyaml" },
-    { name = "requests" },
-    { name = "tqdm" },
     { name = "typing-extensions" },
-    { name = "urllib3" },
+    { name = "urllib3", marker = "python_full_version < '4'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/9c/fd/893821aa47ff69925f378a42a2deedb3285a8097c0886e0de564bb700891/pinecone-client-2.2.4.tar.gz", hash = "sha256:2c1cc1d6648b2be66e944db2ffa59166a37b9164d1135ad525d9cd8b1e298168", size = 96565, upload-time = "2023-09-15T15:49:50.518Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/fa/38/12731d4af470851b4963eba616605868a8599ef4df51c7b6c928e5f3166d/pinecone-7.3.0.tar.gz", hash = "sha256:307edc155621d487c20dc71b76c3ad5d6f799569ba42064190d03917954f9a7b", size = 235256, upload-time = "2025-06-27T20:03:51.498Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/df/d4/cffbb61236c6c1d7510e835c1ff843e4e7d705ed59d21c0e5b6dc1cb4fd8/pinecone_client-2.2.4-py3-none-any.whl", hash = "sha256:5bf496c01c2f82f4e5c2dc977cc5062ecd7168b8ed90743b09afcc8c7eb242ec", size = 179357, upload-time = "2023-09-15T15:49:48.216Z" },
+    { url = "https://files.pythonhosted.org/packages/b7/a6/c5d54a5fb1de3983a8739c1a1660e7a7074db2cbadfa875b823fcf29b629/pinecone-7.3.0-py3-none-any.whl", hash = "sha256:315b8fef20320bef723ecbb695dec0aafa75d8434d86e01e5a0e85933e1009a8", size = 587563, upload-time = "2025-06-27T20:03:50.249Z" },
+]
+
+[[package]]
+name = "pinecone-plugin-assistant"
+version = "1.8.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "packaging" },
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b2/01/65c4c3a81732fa379f8e7f78a8c18aa57a1139f5b79d58b93a69f2fc8cb0/pinecone_plugin_assistant-1.8.0.tar.gz", hash = "sha256:8e8682cff30f9bae9243b384021aba71c91f4e6ef1650e9d63ee64aab83cba87", size = 150435, upload-time = "2025-08-31T14:31:18.046Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/dd/49/62ab8e2f9098bf8593e36bbe6e729fcc0500bafca7d88be7b62eac66c8b0/pinecone_plugin_assistant-1.8.0-py3-none-any.whl", hash = "sha256:71ae42c3b4478d23138cbc4fe3505db561319a826f5aff4ef2e306a25ac56686", size = 259281, upload-time = "2025-08-31T14:31:16.587Z" },
+]
+
+[[package]]
+name = "pinecone-plugin-interface"
+version = "0.0.7"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f4/fb/e8a4063264953ead9e2b24d9b390152c60f042c951c47f4592e9996e57ff/pinecone_plugin_interface-0.0.7.tar.gz", hash = "sha256:b8e6675e41847333aa13923cc44daa3f85676d7157324682dc1640588a982846", size = 3370, upload-time = "2024-06-05T01:57:52.093Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3b/1d/a21fdfcd6d022cb64cef5c2a29ee6691c6c103c4566b41646b080b7536a5/pinecone_plugin_interface-0.0.7-py3-none-any.whl", hash = "sha256:875857ad9c9fc8bbc074dbe780d187a2afd21f5bfe0f3b08601924a61ef1bba8", size = 6249, upload-time = "2024-06-05T01:57:50.583Z" },
 ]
 
 [[package]]
@@ -1270,6 +1271,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pypdf2"
+version = "3.0.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/9f/bb/18dc3062d37db6c491392007dfd1a7f524bb95886eb956569ac38a23a784/PyPDF2-3.0.1.tar.gz", hash = "sha256:a74408f69ba6271f71b9352ef4ed03dc53a31aa404d29b5d31f53bfecfee1440", size = 227419, upload-time = "2022-12-31T10:36:13.13Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8e/5e/c86a5643653825d3c913719e788e41386bee415c2b87b4f955432f2de6b2/pypdf2-3.0.1-py3-none-any.whl", hash = "sha256:d16e4205cfee272fbdc0568b68d82be796540b1537508cef59388f839c191928", size = 232572, upload-time = "2022-12-31T10:36:10.327Z" },
+]
+
+[[package]]
 name = "python-dateutil"
 version = "2.9.0.post0"
 source = { registry = "https://pypi.org/simple" }
@@ -1279,6 +1289,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/66/c0/0c8b6ad9f17a802ee498c46e004a0eb49bc148f2fd230864601a86dcf6db/python-dateutil-2.9.0.post0.tar.gz", hash = "sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3", size = 342432, upload-time = "2024-03-01T18:36:20.211Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ec/57/56b9bcc3c9c6a792fcbaf139543cee77261f3651ca9da0c93f5c1221264b/python_dateutil-2.9.0.post0-py2.py3-none-any.whl", hash = "sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427", size = 229892, upload-time = "2024-03-01T18:36:18.57Z" },
+]
+
+[[package]]
+name = "python-docx"
+version = "1.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "lxml" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a9/f7/eddfe33871520adab45aaa1a71f0402a2252050c14c7e3009446c8f4701c/python_docx-1.2.0.tar.gz", hash = "sha256:7bc9d7b7d8a69c9c02ca09216118c86552704edc23bac179283f2e38f86220ce", size = 5723256, upload-time = "2025-06-16T20:46:27.921Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d0/00/1e03a4989fa5795da308cd774f05b704ace555a70f9bf9d3be057b680bcf/python_docx-1.2.0-py3-none-any.whl", hash = "sha256:3fd478f3250fbbbfd3b94fe1e985955737c145627498896a8a6bf81f4baf66c7", size = 252987, upload-time = "2025-06-16T20:46:22.506Z" },
 ]
 
 [[package]]
@@ -2028,15 +2051,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/07/f6/d0e5b343768e8bcb4cda79f0f2f55051bf26177ecd5651f84c07567461cf/watchdog-6.0.0-py3-none-win32.whl", hash = "sha256:07df1fdd701c5d4c8e55ef6cf55b8f0120fe1aef7ef39a1c6fc6bc2e606d517a", size = 79065, upload-time = "2024-11-01T14:07:09.525Z" },
     { url = "https://files.pythonhosted.org/packages/db/d9/c495884c6e548fce18a8f40568ff120bc3a4b7b99813081c8ac0c936fa64/watchdog-6.0.0-py3-none-win_amd64.whl", hash = "sha256:cbafb470cf848d93b5d013e2ecb245d4aa1c8fd0504e863ccefa32445359d680", size = 79070, upload-time = "2024-11-01T14:07:10.686Z" },
     { url = "https://files.pythonhosted.org/packages/33/e8/e40370e6d74ddba47f002a32919d91310d6074130fe4e17dabcafc15cbf1/watchdog-6.0.0-py3-none-win_ia64.whl", hash = "sha256:a1914259fa9e1454315171103c6a30961236f508b9b623eae470268bbcc6a22f", size = 79067, upload-time = "2024-11-01T14:07:11.845Z" },
-]
-
-[[package]]
-name = "win32-setctime"
-version = "1.2.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/b3/8f/705086c9d734d3b663af0e9bb3d4de6578d08f46b1b101c2442fd9aecaa2/win32_setctime-1.2.0.tar.gz", hash = "sha256:ae1fdf948f5640aae05c511ade119313fb6a30d7eabe25fef9764dca5873c4c0", size = 4867, upload-time = "2024-12-07T15:28:28.314Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/e1/07/c6fe3ad3e685340704d314d765b7912993bcb8dc198f0e7a89382d37974b/win32_setctime-1.2.0-py3-none-any.whl", hash = "sha256:95d644c4e708aba81dc3704a116d8cbc974d70b3bdb8be1d150e36be6e9d1390", size = 4083, upload-time = "2024-12-07T15:28:26.465Z" },
 ]
 
 [[package]]

@@ -1,7 +1,7 @@
 streamlit
 python-dotenv
 
-pinecone-client==2.2.4
+pinecone>=7.3.0
 sentence-transformers
 
 ollama
@@ -14,6 +14,10 @@ duckduckgo_search
 # Transcription
 openai-whisper
 pydub
+
+# Text extraction
+PyPDF2
+python-docx
 
 # Utils
 tqdm

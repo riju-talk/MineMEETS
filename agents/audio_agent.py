@@ -16,8 +16,7 @@ class AudioAgent:
     """Agent for transcribing audio files using Whisper."""
 
     SUPPORTED_FORMATS = {
-        '.mp3', '.wav', '.m4a', '.ogg', '.flac',
-        '.mp4', '.m4v', '.webm', '.mpga', '.mpeg'
+        '.mp3', '.wav', '.m4a', '.ogg', '.flac'
     }
     MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
 
