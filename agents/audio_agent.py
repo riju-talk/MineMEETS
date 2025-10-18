@@ -1,13 +1,8 @@
-# agents/audio_agent.py
-
 from typing import Dict, Any, Optional, List, Union
 from pathlib import Path
 import asyncio
-import logging
 import os
 import whisper
-import uuid
-from langchain.text_splitter import RecursiveCharacterTextSplitter
 from pydantic import BaseModel, Field
 
 from .base_agent import BaseAgent, AgentResponse

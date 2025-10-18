@@ -12,8 +12,7 @@ load_dotenv(override=True)
 # Debug: Print environment variables (masked where appropriate)
 print("Environment variables loaded:")
 print(f"PINECONE_API_KEY: {'*' * len(os.getenv('PINECONE_API_KEY', '')) if os.getenv('PINECONE_API_KEY') else 'Not set'}")
-print(f"GROQ_API_KEY: {'*' * len(os.getenv('GROQ_API_KEY', '')) if os.getenv('GROQ_API_KEY') else 'Not set'}")
-print(f"SMTP_SERVER: {os.getenv('SMTP_SERVER', 'Not set')}")
+p#rint(f"GROQ_API_KEY: {'*' * len(os.getenv('GROQ_API_KEY', '')) if os.getenv('GROQ_API_KEY') else 'Not set'}")
 
 # Import coordinator (your async orchestrator)
 from agents.coordinator import coordinator
@@ -21,7 +20,6 @@ from agents.coordinator import coordinator
 # -------- Streamlit page config --------
 st.set_page_config(
     page_title="MineMEETS - Meeting Assistant",
-    page_icon="🤖",
     layout="wide"
 )
 
@@ -97,12 +95,12 @@ class MeetingAssistantApp:
     
     def render_sidebar(self):
         st.sidebar.title("Meetings")
-        st.sidebar.caption("Upload a meeting file: transcript (.txt), audio (.mp3, .wav, etc), or video (.mp4, .webm, etc).")
+        st.sidebar.caption("Upload a meeting file: transcript (.txt), audio (.mp3, .wav, etc), video (transcribed), or screenshots/images (.png, .jpg, .webp, .bmp).")
 
         uploaded_file = st.sidebar.file_uploader(
             "Upload Meeting File",
-            type=["txt", "mp3", "wav", "m4a", "ogg", "flac", "mp4", "m4v", "webm", "mpga", "mpeg"],
-            help="Supported: .txt, .mp3, .wav, .m4a, .ogg, .flac, .mp4, .m4v, .webm, .mpga, .mpeg"
+            type=["txt", "mp3", "wav", "m4a", "ogg", "flac", "mp4", "m4v", "webm", "mpga", "mpeg", "png", "jpg", "jpeg", "webp", "bmp"],
+            help="Supported: .txt, .mp3, .wav, .m4a, .ogg, .flac, .mp4, .m4v, .webm, .mpga, .mpeg, .png, .jpg, .jpeg, .webp, .bmp"
         )
 
         if uploaded_file is not None:
@@ -114,6 +112,8 @@ class MeetingAssistantApp:
                 file_type = 'audio'
             elif suffix in ['.mp4', '.m4v', '.webm']:
                 file_type = 'video'
+            elif suffix in ['.png', '.jpg', '.jpeg', '.webp', '.bmp']:
+                file_type = 'image'
             else:
                 st.sidebar.error(f"Unsupported file type: {suffix}")
                 return
@@ -170,7 +170,8 @@ class MeetingAssistantApp:
         st.markdown("""
         # 🤖 Welcome to MineMEETS
         Your intelligent meeting assistant that helps you:
-        - 📝 Transcribe and analyze meeting content
+        - 📝 Ingest text transcripts and transcribe audio/video
+        - 🖼️ Embed screenshots/images for retrieval (CLIP ViT-B/32)
         - 🔍 Extract key insights and action items
         - ❓ Get answers to your questions
         - 📧 Share insights via email
@@ -180,7 +181,7 @@ class MeetingAssistantApp:
         2. View and analyze the content
         3. Ask questions about the meeting
 
-        **Supported formats today:** TXT (audio/video coming soon)
+        **Supported formats:** TXT, MP3/WAV/M4A/OGG/FLAC (transcribed), MP4/M4V/WEBM (transcribed), PNG/JPG/JPEG/WEBP/BMP (embedded)
         """)
     
     def _render_meeting_content(self, meeting: Dict[str, Any]):

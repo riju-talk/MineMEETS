@@ -1,61 +1,38 @@
 # agents/internet_agent.py
 from typing import Dict, Any, Optional, List
-from .base_agent import BaseAgent, AgentResponse
-import os
 import asyncio
 import logging
-from duckduckgo_search import ddg  # pip install duckduckgo_search
-import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig, pipeline
+from duckduckgo_search import DDGS  # Correct import for duckduckgo_search
+from agents.llm import LLM
 
-class InternetAgent(BaseAgent):
-    """Internet agent using DuckDuckGo for search and a local HF LLM for summarization."""
+class InternetAgent:
+    """Internet agent using DuckDuckGo for search and LLM for summarization."""
 
     def __init__(self):
-        super().__init__(name="internet_agent", description="Performs web searches using DuckDuckGo and summarizes results with a local LLM.")
-        # model config
-        model_id = os.getenv("LLM_MODEL_ID", "unsloth/Meta-Llama-3-8B-Instruct-bnb-4bit")
-        max_new_tokens = int(os.getenv("LLM_MAX_NEW_TOKENS", "256"))
-        temperature = float(os.getenv("LLM_TEMPERATURE", "0.0"))
+        self.llm = LLM(model="llama3.1", temperature=0.0)
+        self.logger = logging.getLogger(__name__)
 
-        bnb_cfg = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.bfloat16
-        )
-
-        # Load tokenizer & model
-        self.tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=True)
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_id,
-            device_map="auto",
-            quantization_config=bnb_cfg,
-            torch_dtype=torch.bfloat16
-        )
-        self.gen_pipe = pipeline(
-            "text-generation",
-            model=self.model,
-            tokenizer=self.tokenizer,
-            max_new_tokens=max_new_tokens,
-            temperature=temperature,
-            do_sample=False,
-            return_full_text=False
-        )
-
-    def _run_gen_sync(self, prompt: str) -> str:
-        res = self.gen_pipe(prompt)
-        return res[0].get("generated_text", "") if res else ""
+    def _ddg_search(self, query: str, max_results: int = 5) -> List[Dict[str, str]]:
+        """Synchronous DuckDuckGo search using DDGS."""
+        results = []
+        try:
+            with DDGS() as ddg:
+                for result in ddg.text(query, max_results=max_results):
+                    results.append(result)
+        except Exception as e:
+            self.logger.error(f"DuckDuckGo search failed: {e}")
+        return results
 
     async def _run_gen(self, prompt: str) -> str:
-        return await asyncio.to_thread(self._run_gen_sync, prompt)
+        """Run generation using LLM."""
+        return await self.llm.generate_async(prompt)
 
-    async def process(self, query: str, context: Optional[Dict[str, Any]] = None) -> AgentResponse:
+    async def process(self, query: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Perform a web search with DuckDuckGo and summarize top results.
 
         Returns:
-          AgentResponse with fields: answer (string), sources (list of dicts with title/url/snippet)
+          Dict with fields: answer (string), sources (list of dicts with title/url/snippet)
         """
         try:
             # Build a search query; optionally include meeting context for more targeted search
@@ -63,11 +40,10 @@ class InternetAgent(BaseAgent):
                 meeting_meta = context["meeting_context"]
                 query = f"{query} (Meeting context: {meeting_meta})"
 
-            # DuckDuckGo search (synchronous)
-            # ddg returns list of dicts: {"title","href","body"}
-            results = ddg(query, max_results=5) or []
+            # DuckDuckGo search (synchronous, wrapped in thread)
+            results = await asyncio.to_thread(self._ddg_search, query, max_results=5)
             if not results:
-                return AgentResponse(success=True, content={"answer": "", "sources": []})
+                return {"success": True, "content": {"answer": "", "sources": []}}
 
             # Build a context string containing titles and snippets
             snippet_texts = []
@@ -88,8 +64,8 @@ class InternetAgent(BaseAgent):
             )
 
             answer = await self._run_gen(prompt)
-            return AgentResponse(success=True, content={"answer": answer.strip(), "sources": sources})
+            return {"success": True, "content": {"answer": answer.strip(), "sources": sources}}
 
         except Exception as e:
             self.logger.exception("InternetAgent failed")
-            return AgentResponse(success=False, content=f"Error performing internet search: {e}", metadata={"error": str(e)})
+            return {"success": False, "content": f"Error performing internet search: {e}"}
