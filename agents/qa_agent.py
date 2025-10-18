@@ -1,18 +1,13 @@
 # agents/qa_agent.py
-import os
+import asyncio
 from typing import Optional, Dict, Any, List
-from .base_agent import BaseAgent, AgentResponse
 from agents.pinecone_db import PineconeDB
-from langchain_ollama import ChatOllama
+from agents.llm import LLM
 
-class QAAgent(BaseAgent):
+class QAAgent:
     def __init__(self, pinecone_db: PineconeDB):
-        super().__init__(name="qa_agent", description="RAG QA agent")
         self.pinecone_db = pinecone_db
-        self.llm = ChatOllama(
-            model="llama3.1",
-            temperature=0.0,
-        )
+        self.llm = LLM(model="llama3.1", temperature=0.0)
         # Prompt template (string format)
         base = (
             "You are a concise assistant. Use only the provided context to answer. "
@@ -22,7 +17,7 @@ class QAAgent(BaseAgent):
             f"{base}\n\nContext:\n{{context}}\n\nQuestion: {{question}}\nAnswer:"
         )
 
-    async def process(self, question: str, context: Optional[Dict[str, Any]] = None) -> AgentResponse:
+    async def process(self, question: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         try:
             meeting_id = context.get("meeting_id") if context else None
             namespace = meeting_id if meeting_id else None
@@ -40,15 +35,12 @@ class QAAgent(BaseAgent):
             context_block = "\n\n---\n".join(contexts) if contexts else ""
             prompt = self.prompt_template.format(context=context_block, question=question)
 
-            # Use ChatOllama directly
-            from langchain_core.messages import HumanMessage
-            message = HumanMessage(content=prompt)
-            response = self.llm.invoke([message])
-            answer = response.content.strip()
+            # Use LLM directly
+            answer = await self.llm.generate_async(prompt)
 
-            return AgentResponse(success=True, content={
-                "answer": answer,
+            return {"success": True, "content": {
+                "answer": answer.strip(),
                 "sources": sources
-            })
+            }}
         except Exception as e:
-            return AgentResponse(success=False, content=f"QA failed: {e}")
+            return {"success": False, "content": f"QA failed: {e}"}
