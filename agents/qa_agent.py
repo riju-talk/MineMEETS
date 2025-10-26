@@ -4,6 +4,7 @@ import logging
 from typing import Optional, Dict, Any, List
 from agents.pinecone_db import PineconeDB
 from agents.llm import LLM
+from agents.multimodal_rag import MultimodalRAGChain
 
 logger = logging.getLogger(__name__)
 
@@ -11,7 +12,10 @@ class QAAgent:
     def __init__(self, pinecone_db: PineconeDB):
         self.pinecone_db = pinecone_db
         self.llm = LLM(model="llama3.1", temperature=0.0)
-        
+
+        # Initialize multimodal RAG chain
+        self.multimodal_rag = MultimodalRAGChain(pinecone_db)
+
         # More flexible and comprehensive prompt templates
         self.qa_prompt_template = """You are an intelligent meeting assistant analyzing meeting transcripts. Use the provided context to answer the question thoroughly.
 
@@ -40,34 +44,62 @@ QUESTION: {question}
 Please provide any potentially relevant information from the meeting, or explain why the meeting doesn't cover this topic:"""
 
     async def process(self, question: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Enhanced QA processing using multimodal RAG."""
+        try:
+            meeting_id = context.get("meeting_id") if context else None
+
+            # Use multimodal RAG for enhanced responses
+            multimodal_response = await self.multimodal_rag.query(question, meeting_id)
+
+            if multimodal_response["success"]:
+                return {
+                    "success": True,
+                    "content": {
+                        "answer": multimodal_response["answer"],
+                        "sources": multimodal_response["sources"],
+                        "context_stats": multimodal_response["context_stats"],
+                        "enhanced": True  # Flag to indicate multimodal processing was used
+                    }
+                }
+            else:
+                # Fallback to original implementation
+                return await self._fallback_qa(question, context)
+
+        except Exception as e:
+            logger.error(f"Enhanced QA processing failed: {str(e)}")
+            # Fallback to original implementation
+            return await self._fallback_qa(question, context)
+
+    async def _fallback_qa(self, question: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Original QA implementation as fallback."""
         try:
             meeting_id = context.get("meeting_id") if context else None
             namespace = meeting_id if meeting_id else None
-            
+
             # Get more context with multiple query strategies
             hits = await self._smart_query(question, namespace)
-            
+
             if not hits:
                 return await self._handle_no_context(question, namespace)
 
             # Process contexts with better filtering
             contexts, sources = self._process_hits(hits)
-            
+
             if not contexts:
                 return await self._handle_insufficient_context(question, namespace)
 
             context_block = "\n\n---\n\n".join(contexts)
-            
+
             # Use appropriate prompt based on context relevance
             max_relevance = max([s.get('similarity_score', 0) for s in sources]) if sources else 0
             if max_relevance < 0.6:  # Low relevance threshold
                 prompt = self.fallback_prompt_template.format(
-                    context=context_block, 
+                    context=context_block,
                     question=question
                 )
             else:
                 prompt = self.qa_prompt_template.format(
-                    context=context_block, 
+                    context=context_block,
                     question=question
                 )
 
@@ -75,7 +107,7 @@ Please provide any potentially relevant information from the meeting, or explain
             answer = await self._generate_answer_with_fallback(prompt, question, context_block)
 
             return {
-                "success": True, 
+                "success": True,
                 "content": {
                     "answer": answer.strip(),
                     "sources": self._format_sources(sources),
@@ -87,11 +119,11 @@ Please provide any potentially relevant information from the meeting, or explain
                     }
                 }
             }
-            
+
         except Exception as e:
             logger.error(f"QA processing error: {str(e)}")
             return {
-                "success": False, 
+                "success": False,
                 "content": f"I encountered an error while processing your question. Please try again."
             }
 
@@ -316,7 +348,32 @@ Please extract and share any information from the meeting that could be helpful:
         return first_sentence
 
     async def get_meeting_overview(self, meeting_id: str) -> Dict[str, Any]:
-        """Generate comprehensive meeting overview."""
+        """Generate comprehensive meeting overview using multimodal RAG."""
+        try:
+            # Use multimodal RAG for enhanced overview
+            summary_response = await self.multimodal_rag.get_meeting_summary(meeting_id)
+
+            if summary_response["success"]:
+                return {
+                    "success": True,
+                    "content": {
+                        "overview": summary_response["summary"],
+                        "topics": [],  # Could be enhanced to extract topics
+                        "modalities": summary_response["modalities"],
+                        "stats": summary_response["stats"],
+                        "enhanced": True
+                    }
+                }
+            else:
+                # Fallback to original implementation
+                return await self._fallback_overview(meeting_id)
+
+        except Exception as e:
+            logger.error(f"Enhanced overview failed: {str(e)}")
+            return await self._fallback_overview(meeting_id)
+
+    async def _fallback_overview(self, meeting_id: str) -> Dict[str, Any]:
+        """Original overview implementation as fallback."""
         try:
             # Get diverse content samples
             hits = self.pinecone_db.query_text("meeting discussion conversation topics", 

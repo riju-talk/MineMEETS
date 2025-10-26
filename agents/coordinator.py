@@ -10,15 +10,10 @@ from agents.qa_agent import QAAgent
 from agents.internet_agent import InternetAgent
 from agents.image_agent import ImageAgent
 from agents.pinecone_db import PineconeDB
-import logging
-
-logger = logging.getLogger(__name__)
+from agents.config import config, logger
+from agents.document_processor import DocumentProcessor
 
 class MeetingCoordinator:
-    """
-    Enhanced meeting coordinator with improved error handling, 
-    progress tracking, and comprehensive meeting management.
-    """
     
     def __init__(self):
         self.pinecone_db = PineconeDB()
@@ -26,6 +21,7 @@ class MeetingCoordinator:
         self.image_agent = ImageAgent()
         self.qa_agent = QAAgent(self.pinecone_db)
         self.internet_agent = InternetAgent()
+        self.document_processor = DocumentProcessor()  # Initialize LangChain document processor
         self.active_meetings = {}  # {meeting_id: meeting_metadata}
         
         # Configuration
@@ -155,18 +151,94 @@ class MeetingCoordinator:
             raise ValueError(f"Unsupported content type: {content_type}")
 
     async def _process_transcript(self, meeting_data: Dict[str, Any], meeting_id: str) -> Dict[str, Any]:
-        """Process transcript content."""
+        """Process transcript content using LangChain document processor."""
         if "content" in meeting_data:
             raw_content = meeting_data["content"]
         else:
             with open(meeting_data["content_path"], "r", encoding="utf-8") as f:
                 raw_content = f.read()
-                
-        chunks = await self._chunk_text_safe(raw_content, meeting_id)
-        return {"success": True, "raw_content": raw_content, "chunks": chunks}
+
+        # Use document processor for better transcript chunking
+        meeting_metadata = {
+            "meeting_id": meeting_id,
+            "title": meeting_data.get("title", meeting_id),
+            "type": "transcript",
+            "source_type": "transcript_file" if "content_path" in meeting_data else "raw_transcript"
+        }
+
+        try:
+            # Use LangChain document processor for better chunking
+            chunks = self.document_processor.load_and_split_text(raw_content, meeting_metadata)
+
+            # Convert LangChain documents back to our format
+            formatted_chunks = []
+            for chunk in chunks:
+                formatted_chunks.append({
+                    "text": chunk.page_content,
+                    "metadata": chunk.metadata
+                })
+
+            return {
+                "success": True,
+                "raw_content": raw_content,
+                "chunks": formatted_chunks[:self.max_chunks_per_meeting]  # Limit chunks
+            }
+
+        except Exception as e:
+            # Fallback to original chunking method
+            logger.warning(f"LangChain transcript processing failed, falling back to legacy method: {str(e)}")
+            chunks = await self._chunk_text_safe(raw_content, meeting_id)
+            return {"success": True, "raw_content": raw_content, "chunks": chunks}
 
     async def _process_file(self, meeting_data: Dict[str, Any], meeting_id: str) -> Dict[str, Any]:
-        """Process document files."""
+        """Process document files using LangChain document processor."""
+        file_path = meeting_data["content_path"]
+
+        # Validate file using document processor
+        validation = self.document_processor.validate_document(file_path)
+        if not validation["valid"]:
+            raise ValueError(f"Invalid file: {validation['error']}")
+
+        if not validation["can_process"]:
+            raise ValueError(f"File too large: {validation['file_size_mb']}MB. Maximum is {self.max_file_size_mb}MB.")
+
+        # Load and split document using LangChain
+        meeting_metadata = {
+            "meeting_id": meeting_id,
+            "title": meeting_data.get("title", Path(file_path).stem),
+            "type": "document",
+            "source_file": file_path,
+            "file_extension": validation["extension"]
+        }
+
+        try:
+            # Use LangChain document processor
+            chunks = self.document_processor.load_and_split_document(file_path, meeting_metadata)
+
+            # Convert LangChain documents back to our format
+            formatted_chunks = []
+            for chunk in chunks:
+                formatted_chunks.append({
+                    "text": chunk.page_content,
+                    "metadata": chunk.metadata
+                })
+
+            # Get raw content for storage
+            raw_content = "\n\n".join([chunk.page_content for chunk in chunks])
+
+            return {
+                "success": True,
+                "raw_content": raw_content,
+                "chunks": formatted_chunks[:self.max_chunks_per_meeting]  # Limit chunks
+            }
+
+        except Exception as e:
+            # Fallback to original processing if LangChain fails
+            logger.warning(f"LangChain processing failed, falling back to legacy method: {str(e)}")
+            return await self._process_file_fallback(meeting_data, meeting_id)
+
+    async def _process_file_fallback(self, meeting_data: Dict[str, Any], meeting_id: str) -> Dict[str, Any]:
+        """Fallback file processing using legacy methods."""
         file_path = meeting_data["content_path"]
         raw_content = self._extract_text_from_file(file_path)
         chunks = await self._chunk_text_safe(raw_content, meeting_id)
@@ -175,20 +247,20 @@ class MeetingCoordinator:
     async def _process_audio(self, meeting_data: Dict[str, Any], meeting_id: str) -> Dict[str, Any]:
         """Process audio files."""
         audio_resp = await self.audio_agent.process(
-            {"file_path": meeting_data["content_path"]}, 
+            {"file_path": meeting_data["content_path"]},
             context={"meeting_id": meeting_id}
         )
-        
+
         if not audio_resp["success"]:
             raise RuntimeError(f"Audio processing failed: {audio_resp['content']}")
-        
+
         raw_content = audio_resp["content"]["text"]
         chunks = audio_resp["content"].get("chunks") or await self._chunk_text_safe(raw_content, meeting_id)
-        
+
         # Normalize audio chunks
         if chunks and isinstance(chunks[0], dict) and "metadata" not in chunks[0]:
             chunks = self._normalize_audio_chunks(chunks, meeting_id)
-            
+
         return {"success": True, "raw_content": raw_content, "chunks": chunks}
 
     async def _process_image(self, meeting_data: Dict[str, Any], meeting_id: str) -> Dict[str, Any]:
