@@ -22,9 +22,7 @@ class MultimodalRetriever:
 
         try:
             # Strategy 1: Direct semantic search
-            semantic_results = self.pinecone_db.query_text(
-                query, namespace=meeting_id, top_k=10
-            )
+            semantic_results = self.pinecone_db.query_text(query, namespace=meeting_id, top_k=10)
             for result in semantic_results:
                 result["metadata"]["search_type"] = "semantic"
                 all_results.append(result)
@@ -43,9 +41,7 @@ class MultimodalRetriever:
             # Strategy 3: Query expansion for general questions
             if self._is_general_question(query):
                 expanded_results = self.pinecone_db.query_text(
-                    "meeting discussion topics conversation content",
-                    namespace=meeting_id,
-                    top_k=8
+                    "meeting discussion topics conversation content", namespace=meeting_id, top_k=8
                 )
                 for result in expanded_results:
                     result["metadata"]["search_type"] = "expanded"
@@ -54,7 +50,7 @@ class MultimodalRetriever:
             # Deduplicate and rank
             unique_results = self._deduplicate_results(all_results)
             ranked_results = self._rank_results(unique_results, query)
-            
+
             return ranked_results[:top_k]
 
         except Exception as e:
@@ -64,10 +60,45 @@ class MultimodalRetriever:
     def _extract_keywords(self, text: str) -> List[str]:
         """Extract keywords from query."""
         stop_words = {
-            'what', 'how', 'why', 'when', 'where', 'who', 'which', 'the', 'a', 'an',
-            'is', 'are', 'was', 'were', 'do', 'does', 'did', 'can', 'could', 'would',
-            'should', 'will', 'shall', 'may', 'might', 'must', 'about', 'and', 'or',
-            'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from'
+            "what",
+            "how",
+            "why",
+            "when",
+            "where",
+            "who",
+            "which",
+            "the",
+            "a",
+            "an",
+            "is",
+            "are",
+            "was",
+            "were",
+            "do",
+            "does",
+            "did",
+            "can",
+            "could",
+            "would",
+            "should",
+            "will",
+            "shall",
+            "may",
+            "might",
+            "must",
+            "about",
+            "and",
+            "or",
+            "but",
+            "in",
+            "on",
+            "at",
+            "to",
+            "for",
+            "of",
+            "with",
+            "by",
+            "from",
         }
         words = text.lower().split()
         keywords = [word for word in words if word not in stop_words and len(word) > 2]
@@ -76,8 +107,14 @@ class MultimodalRetriever:
     def _is_general_question(self, question: str) -> bool:
         """Check if this is a general question."""
         general_indicators = [
-            'what was discussed', 'summary', 'overview', 'main points',
-            'key topics', 'what happened', 'meeting about', 'agenda'
+            "what was discussed",
+            "summary",
+            "overview",
+            "main points",
+            "key topics",
+            "what happened",
+            "meeting about",
+            "agenda",
         ]
         question_lower = question.lower()
         return any(indicator in question_lower for indicator in general_indicators)
@@ -86,13 +123,13 @@ class MultimodalRetriever:
         """Remove duplicate results based on ID."""
         seen = set()
         unique = []
-        
+
         for result in results:
             result_id = result.get("id")
             if result_id not in seen:
                 seen.add(result_id)
                 unique.append(result)
-        
+
         return unique
 
     def _rank_results(self, results: List[Dict[str, Any]], query: str) -> List[Dict[str, Any]]:
@@ -100,7 +137,7 @@ class MultimodalRetriever:
         for result in results:
             score = self._calculate_score(result, query)
             result["hybrid_score"] = score
-        
+
         # Sort by hybrid score
         results.sort(key=lambda x: x["hybrid_score"], reverse=True)
         return results
@@ -109,26 +146,26 @@ class MultimodalRetriever:
         """Calculate hybrid ranking score."""
         original_score = result.get("score", 0)
         metadata = result.get("metadata", {})
-        
+
         # Boost by search type
         search_type = metadata.get("search_type", "semantic")
         type_boost = {"semantic": 1.0, "keyword": 0.8, "expanded": 0.6}.get(search_type, 0.5)
-        
+
         # Boost by content type
         content_type = metadata.get("type", "text")
         content_boost = {"text_chunk": 1.0, "audio_segment": 0.9}.get(content_type, 0.7)
-        
+
         # Position boost (earlier content may be more important)
         position = metadata.get("position", 0)
         position_boost = max(0.5, 1.0 - (position * 0.01))
-        
+
         # Keyword overlap boost
         query_keywords = set(self._extract_keywords(query))
         text = result.get("text", "")
         content_keywords = set(self._extract_keywords(text))
         overlap = len(query_keywords.intersection(content_keywords))
         keyword_boost = 1 + (0.1 * overlap)
-        
+
         return original_score * type_boost * content_boost * position_boost * keyword_boost
 
 
@@ -148,7 +185,7 @@ class MultimodalRAGChain:
                     "success": False,
                     "answer": "No meeting ID provided",
                     "sources": [],
-                    "context_stats": {"sources_used": 0, "modalities": []}
+                    "context_stats": {"sources_used": 0, "modalities": []},
                 }
 
             # Retrieve relevant context
@@ -159,18 +196,18 @@ class MultimodalRAGChain:
                     "success": True,
                     "answer": "I couldn't find relevant information in the meeting content to answer your question.",
                     "sources": [],
-                    "context_stats": {"sources_used": 0, "modalities": []}
+                    "context_stats": {"sources_used": 0, "modalities": []},
                 }
 
             # Categorize by modality
             modality_contexts = self._categorize_by_modality(results)
-            
+
             # Format context
             context_text = self._format_context(modality_contexts)
-            
+
             # Create prompt
             prompt = self._create_prompt(context_text, question, modality_contexts)
-            
+
             # Generate answer
             answer = await self.llm.generate_async(prompt)
 
@@ -186,8 +223,8 @@ class MultimodalRAGChain:
                     "sources_used": len(results),
                     "modalities": modalities,
                     "modality_breakdown": self._get_modality_breakdown(results),
-                    "total_context_length": len(context_text)
-                }
+                    "total_context_length": len(context_text),
+                },
             }
 
         except Exception as e:
@@ -196,13 +233,15 @@ class MultimodalRAGChain:
                 "success": False,
                 "answer": f"Error processing question: {str(e)}",
                 "sources": [],
-                "context_stats": {"sources_used": 0, "modalities": []}
+                "context_stats": {"sources_used": 0, "modalities": []},
             }
 
-    def _categorize_by_modality(self, results: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    def _categorize_by_modality(
+        self, results: List[Dict[str, Any]]
+    ) -> Dict[str, List[Dict[str, Any]]]:
         """Categorize results by modality."""
         categories = {"text": [], "audio": [], "image": [], "other": []}
-        
+
         for result in results:
             doc_type = result.get("metadata", {}).get("type", "text")
             if doc_type == "audio_segment":
@@ -213,7 +252,7 @@ class MultimodalRAGChain:
                 categories["image"].append(result)
             else:
                 categories["other"].append(result)
-        
+
         return categories
 
     def _format_context(self, modality_contexts: Dict[str, List[Dict[str, Any]]]) -> str:
@@ -246,11 +285,11 @@ class MultimodalRAGChain:
 
         return "\n\n=== MODALITY SEPARATOR ===\n\n".join(sections)
 
-    def _create_prompt(self, context: str, question: str, modality_contexts: Dict[str, List[Dict]]) -> str:
+    def _create_prompt(
+        self, context: str, question: str, modality_contexts: Dict[str, List[Dict]]
+    ) -> str:
         """Create prompt for LLM."""
-        modality_info = {
-            k: f"{len(v)} items" for k, v in modality_contexts.items() if v
-        }
+        modality_info = {k: f"{len(v)} items" for k, v in modality_contexts.items() if v}
 
         return f"""You are an intelligent meeting assistant analyzing multimodal content.
 
@@ -282,13 +321,13 @@ ANSWER:"""
     def _format_sources(self, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Format sources with metadata."""
         sources = []
-        
+
         for i, result in enumerate(results):
             metadata = result.get("metadata", {})
             content_type = metadata.get("type", "text")
             search_type = metadata.get("search_type", "semantic")
             text = result.get("text", "")
-            
+
             # Create title
             if content_type == "audio_segment":
                 start = metadata.get("start", "0")
@@ -300,15 +339,17 @@ ANSWER:"""
             else:
                 title = f"Content {i+1} - {search_type}"
 
-            sources.append({
-                "title": title,
-                "content": text,
-                "preview": text[:200] + "..." if len(text) > 200 else text,
-                "content_type": content_type,
-                "search_type": search_type,
-                "hybrid_score": result.get("hybrid_score", 0),
-                "metadata": metadata
-            })
+            sources.append(
+                {
+                    "title": title,
+                    "content": text,
+                    "preview": text[:200] + "..." if len(text) > 200 else text,
+                    "content_type": content_type,
+                    "search_type": search_type,
+                    "hybrid_score": result.get("hybrid_score", 0),
+                    "metadata": metadata,
+                }
+            )
 
         # Sort by score
         sources.sort(key=lambda x: x["hybrid_score"], reverse=True)
@@ -320,7 +361,7 @@ ANSWER:"""
             results = self.retriever.retrieve(
                 "meeting summary overview key points discussion topics decisions",
                 meeting_id,
-                top_k=20
+                top_k=20,
             )
 
             if not results:
@@ -328,14 +369,16 @@ ANSWER:"""
                     "success": True,
                     "summary": "No meeting content available.",
                     "modalities": [],
-                    "stats": {"total_chunks": 0}
+                    "stats": {"total_chunks": 0},
                 }
 
             # Create context
-            context = "\n\n---\n\n".join([
-                f"[{r.get('metadata', {}).get('type', 'content')}]\n{r.get('text', '')}"
-                for r in results
-            ])
+            context = "\n\n---\n\n".join(
+                [
+                    f"[{r.get('metadata', {}).get('type', 'content')}]\n{r.get('text', '')}"
+                    for r in results
+                ]
+            )
 
             # Generate summary
             prompt = f"""Analyze this meeting content and provide a comprehensive summary:
@@ -361,8 +404,8 @@ Structure your response with clear sections:"""
                 "stats": {
                     "total_chunks": len(results),
                     "context_length": len(context),
-                    "modalities_count": len(modalities)
-                }
+                    "modalities_count": len(modalities),
+                },
             }
 
         except Exception as e:
@@ -371,5 +414,5 @@ Structure your response with clear sections:"""
                 "success": False,
                 "summary": f"Failed to generate summary: {str(e)}",
                 "modalities": [],
-                "stats": {"total_chunks": 0}
+                "stats": {"total_chunks": 0},
             }

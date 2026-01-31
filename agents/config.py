@@ -7,32 +7,26 @@ from pathlib import Path
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('mine_meets.log'),
-        logging.StreamHandler()
-    ]
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.FileHandler("mine_meets.log"), logging.StreamHandler()],
 )
 
 logger = logging.getLogger(__name__)
+
 
 class Config:
     """Configuration management with validation and error handling."""
 
     def __init__(self):
-        self.required_env_vars = [
-            'PINECONE_API_KEY',
-            'OLLAMA_HOST',
-            'OLLAMA_MODEL'
-        ]
+        self.required_env_vars = ["PINECONE_API_KEY", "OLLAMA_HOST", "OLLAMA_MODEL"]
 
         self.optional_env_vars = {
-            'PINECONE_ENVIRONMENT': 'us-west-2',
-            'PINECONE_INDEX': 'mine-meets',
-            'WHISPER_MODEL': 'base',
-            'WHISPER_CACHE_DIR': '.cache/whisper',
-            'EMBEDDING_MODEL': 'sentence-transformers/clip-ViT-B-32',
-            'EMBEDDING_DIM': '512'
+            "PINECONE_ENVIRONMENT": "us-west-2",
+            "PINECONE_INDEX": "mine-meets",
+            "WHISPER_MODEL": "base",
+            "WHISPER_CACHE_DIR": ".cache/whisper",
+            "EMBEDDING_MODEL": "sentence-transformers/clip-ViT-B-32",
+            "EMBEDDING_DIM": "512",
         }
 
         # Only validate if explicitly requested
@@ -72,7 +66,7 @@ Optional variables (with defaults):
     def _validate_pinecone_config(self) -> None:
         """Validate Pinecone configuration."""
         try:
-            api_key = os.getenv('PINECONE_API_KEY')
+            api_key = os.getenv("PINECONE_API_KEY")
             if not api_key or len(api_key) < 10:
                 raise ValueError("PINECONE_API_KEY appears invalid")
 
@@ -87,18 +81,20 @@ Optional variables (with defaults):
         try:
             import requests
 
-            ollama_host = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
-            ollama_model = os.getenv('OLLAMA_MODEL', 'llama3.1')
+            ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+            ollama_model = os.getenv("OLLAMA_MODEL", "llama3.1")
 
             # Test connection (optional, don't fail if Ollama not running yet)
             try:
                 response = requests.get(f"{ollama_host}/api/tags", timeout=5)
                 if response.status_code == 200:
-                    models = response.json().get('models', [])
-                    model_names = [model['name'] for model in models]
+                    models = response.json().get("models", [])
+                    model_names = [model["name"] for model in models]
 
                     if ollama_model not in model_names:
-                        logger.warning(f"Ollama model '{ollama_model}' not found. Available models: {model_names}")
+                        logger.warning(
+                            f"Ollama model '{ollama_model}' not found. Available models: {model_names}"
+                        )
                     else:
                         logger.info(f"Ollama model '{ollama_model}' validated")
                 else:
@@ -128,7 +124,7 @@ Optional variables (with defaults):
 
         return config
 
-    def create_env_template(self, file_path: str = '.env.example') -> None:
+    def create_env_template(self, file_path: str = ".env.example") -> None:
         """Create an environment template file."""
         template_content = """# MineMEETS Configuration Template
 # Copy this to .env and fill in your values
@@ -157,6 +153,7 @@ EMBEDDING_DIM=512
             logger.info(f"Created environment template: {file_path}")
         except Exception as e:
             logger.error(f"Failed to create environment template: {str(e)}")
+
 
 # Global configuration instance
 config = Config()

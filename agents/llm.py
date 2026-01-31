@@ -4,15 +4,16 @@ import requests
 import os
 from typing import Optional
 
+
 class LLM:
     """Simple LLM wrapper for Ollama HTTP API."""
-    
+
     def __init__(self, model: str = "llama3.1", temperature: float = 0.0, **kwargs):
         self.model = model
         self.temperature = temperature
         self.base_url = os.getenv("OLLAMA_HOST", "http://localhost:11434")
         self.timeout = kwargs.get("timeout", 300)
-        
+
     def generate(self, prompt: str) -> str:
         """Synchronous generation via Ollama HTTP API."""
         try:
@@ -22,9 +23,9 @@ class LLM:
                     "model": self.model,
                     "prompt": prompt,
                     "temperature": self.temperature,
-                    "stream": False
+                    "stream": False,
                 },
-                timeout=self.timeout
+                timeout=self.timeout,
             )
             response.raise_for_status()
             result = response.json()

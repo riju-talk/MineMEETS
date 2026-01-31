@@ -5,18 +5,18 @@ import asyncio
 from PIL import Image
 from sentence_transformers import SentenceTransformer
 
+
 class ImageEmbedding:
     def __init__(self, id: str, values: List[float], metadata: Dict[str, Any]):
         self.id = id
         self.values = values
         self.metadata = metadata
 
+
 class ImageAgent:
     """Agent for embedding screenshots/images using CLIP ViT-B/32."""
 
-    SUPPORTED_FORMATS = {
-        ".png", ".jpg", ".jpeg", ".webp", ".bmp"
-    }
+    SUPPORTED_FORMATS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 
     def __init__(self, model_name: str = "sentence-transformers/clip-ViT-B-32"):
         self.model_name = model_name
@@ -31,7 +31,9 @@ class ImageAgent:
                 return
             self._model = SentenceTransformer(self.model_name)
 
-    async def process(self, input_data: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def process(
+        self, input_data: Dict[str, Any], context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         """Embed images using CLIP ViT-B/32.
 
         Args:
@@ -42,7 +44,7 @@ class ImageAgent:
             Dict with success, content (list of ImageEmbedding)
         """
         try:
-            if not input_data or 'file_path' not in input_data:
+            if not input_data or "file_path" not in input_data:
                 return {"success": False, "content": "Missing 'file_path' in input data"}
 
             file_path = input_data["file_path"]
@@ -69,7 +71,7 @@ class ImageAgent:
                 embedding = ImageEmbedding(
                     id=file_path.stem,  # Use filename as ID
                     values=vector,
-                    metadata={"file_path": str(file_path)}
+                    metadata={"file_path": str(file_path)},
                 )
 
                 return {"success": True, "content": [embedding.__dict__]}
