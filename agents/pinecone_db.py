@@ -3,30 +3,14 @@ import logging
 from typing import Any, Dict, List, Optional
 import pinecone
 from sentence_transformers import SentenceTransformer
-
-# LangChain imports
-from langchain_pinecone import PineconeVectorStore
-from langchain_core.documents import Document
-from langchain_core.embeddings import Embeddings
-from langchain_community.embeddings import SentenceTransformerEmbeddings
+import time
 
 logger = logging.getLogger(__name__)
 
-class CustomSentenceTransformerEmbeddings(SentenceTransformerEmbeddings):
-    """Custom wrapper for SentenceTransformer to work with LangChain."""
-
-    def __init__(self, model_name: str = "sentence-transformers/clip-ViT-B-32"):
-        super().__init__(model_name=model_name)
-
-    def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        """Embed a list of documents."""
-        return self.model.encode(texts).tolist()
-
-    def embed_query(self, text: str) -> List[float]:
-        """Embed a single query."""
-        return self.model.encode([text])[0].tolist()
 
 class PineconeDB:
+    """Production-ready Pinecone vector database interface."""
+    
     def __init__(self, api_key: Optional[str] = None, index_name: str = "mine-meets"):
         self.api_key = api_key or os.getenv("PINECONE_API_KEY")
         if not self.api_key:
@@ -45,45 +29,59 @@ class PineconeDB:
                 spec=pinecone.ServerlessSpec(cloud="aws", region="us-west-2")
             )
             # Wait for index to be ready
-            import time
             time.sleep(10)
 
-        # Initialize LangChain components
+        # Initialize index and embedding model
         self.index = self.pc.Index(self.index_name)
-        self.embeddings = CustomSentenceTransformerEmbeddings("sentence-transformers/clip-ViT-B-32")
-        self.vector_store = PineconeVectorStore(
-            index=self.index,
-            embedding=self.embeddings,
-            text_key="text"
-        )
+        self.embedding_model = SentenceTransformer("sentence-transformers/clip-ViT-B-32")
 
         logger.info(f"PineconeDB initialized with index: {self.index_name}")
 
+    def embed_text(self, text: str) -> List[float]:
+        """Generate embedding for a single text."""
+        return self.embedding_model.encode([text])[0].tolist()
+    
+    def embed_texts(self, texts: List[str]) -> List[List[float]]:
+        """Generate embeddings for multiple texts."""
+        return self.embedding_model.encode(texts).tolist()
+
     def upsert_documents(self, documents: List[Dict[str, Any]], namespace: str = "") -> None:
-        """Upsert text documents with embeddings using LangChain."""
+        """Upsert text documents with embeddings."""
         try:
-            # Convert to LangChain documents
-            lc_documents = []
-            for doc in documents:
+            if not documents:
+                logger.warning("No documents provided for upsert")
+                return
+            
+            # Generate embeddings and prepare vectors
+            vectors = []
+            for i, doc in enumerate(documents):
                 text = doc.get("text", "").strip()
+                if not text:
+                    continue
+                    
+                # Generate embedding
+                embedding = self.embed_text(text)
+                
+                # Prepare metadata
                 metadata = doc.get("metadata", {})
-                if text:
-                    lc_documents.append(Document(
-                        page_content=text,
-                        metadata=metadata
-                    ))
-
-            if lc_documents:
-                # Use LangChain's add_documents with namespace support
-                # Note: LangChain PineconeVectorStore doesn't directly support namespaces in add_documents
-                # So we need to handle this differently
-                if namespace:
-                    # For namespaced documents, we need to add namespace to metadata
-                    for doc in lc_documents:
-                        doc.metadata["namespace"] = namespace
-
-                self.vector_store.add_documents(lc_documents)
-                logger.info(f"Successfully upserted {len(lc_documents)} documents to namespace '{namespace}'")
+                metadata["text"] = text  # Store text in metadata for retrieval
+                
+                # Create vector with unique ID
+                vector_id = f"{namespace}_{i}" if namespace else f"doc_{i}"
+                vectors.append({
+                    "id": vector_id,
+                    "values": embedding,
+                    "metadata": metadata
+                })
+            
+            if vectors:
+                # Upsert in batches
+                batch_size = 100
+                for i in range(0, len(vectors), batch_size):
+                    batch = vectors[i:i + batch_size]
+                    self.index.upsert(vectors=batch, namespace=namespace)
+                
+                logger.info(f"Successfully upserted {len(vectors)} documents to namespace '{namespace}'")
             else:
                 logger.warning("No valid documents to upsert")
 
@@ -110,49 +108,69 @@ class PineconeDB:
             logger.error(f"Error upserting vectors: {str(e)}")
             raise
 
-    def query_text(self, query: str, namespace: str = "", top_k: int = 5) -> List[Dict[str, Any]]:
-        """Query by text using embeddings with LangChain."""
+    def upsert_vectors(self, vectors: List[Dict[str, Any]], namespace: str = "") -> None:
+        """Upsert pre-computed vectors."""
         try:
-            # Use LangChain's similarity_search_with_score
-            docs_and_scores = self.vector_store.similarity_search_with_score(
-                query,
-                k=top_k,
-                namespace=namespace
+            if not vectors:
+                logger.warning("No vectors provided for upsert")
+                return
+
+            # Upsert in batches
+            batch_size = 100
+            for i in range(0, len(vectors), batch_size):
+                batch = vectors[i:i + batch_size]
+                self.index.upsert(vectors=batch, namespace=namespace)
+
+            logger.info(f"Successfully upserted {len(vectors)} vectors to namespace '{namespace}'")
+
+        except Exception as e:
+            logger.error(f"Error upserting vectors: {str(e)}")
+            raise
+
+    def query(self, query_vector: List[float], namespace: str = "", top_k: int = 5, 
+              filter_dict: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """Query by vector."""
+        try:
+            response = self.index.query(
+                vector=query_vector,
+                top_k=top_k,
+                namespace=namespace,
+                include_metadata=True,
+                filter=filter_dict
             )
-
-            # Convert back to original format
+            
             results = []
-            for doc, score in docs_and_scores:
+            for match in response.get("matches", []):
                 results.append({
-                    "id": doc.metadata.get("chunk_id", doc.id),
-                    "score": score,
-                    "metadata": doc.metadata,
-                    "text": doc.page_content
+                    "id": match["id"],
+                    "score": match["score"],
+                    "metadata": match.get("metadata", {}),
+                    "text": match.get("metadata", {}).get("text", "")
                 })
-
+            
             return results
+
+        except Exception as e:
+            logger.error(f"Error querying vectors: {str(e)}")
+            return []
+    
+    def query_text(self, query: str, namespace: str = "", top_k: int = 5,
+                   filter_dict: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """Query by text using embeddings."""
+        try:
+            # Generate query embedding
+            query_embedding = self.embed_text(query)
+            
+            # Query index
+            return self.query(query_embedding, namespace, top_k, filter_dict)
 
         except Exception as e:
             logger.error(f"Error querying text: {str(e)}")
             return []
-
-    def similarity_search(self, query: str, namespace: str = "", top_k: int = 5, **kwargs) -> List[Document]:
-        """LangChain-style similarity search."""
-        return self.vector_store.similarity_search(
-            query,
-            k=top_k,
-            namespace=namespace,
-            **kwargs
-        )
-
-    def similarity_search_with_score(self, query: str, namespace: str = "", top_k: int = 5, **kwargs) -> List[tuple]:
-        """LangChain-style similarity search with scores."""
-        return self.vector_store.similarity_search_with_score(
-            query,
-            k=top_k,
-            namespace=namespace,
-            **kwargs
-        )
+    
+    def similarity_search(self, query: str, namespace: str = "", k: int = 5) -> List[Dict[str, Any]]:
+        """Similarity search interface."""
+        return self.query_text(query, namespace, k)
 
     def delete_vectors(self, ids: Optional[List[str]] = None, namespace: str = "", delete_all: bool = False) -> None:
         """Delete vectors by IDs or all vectors with proper error handling."""

@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  minemeets:
+    build: .
+    container_name: minemeets-app
+    ports:
+      - "7860:7860"
+    environment:
+      - PINECONE_API_KEY=${PINECONE_API_KEY}
+      - WHISPER_MODEL=${WHISPER_MODEL:-base}
+      - WHISPER_CACHE_DIR=/app/.cache/whisper
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.1}
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
+    volumes:
+      - ./data:/app/data
+      - whisper-cache:/app/.cache/whisper
+    restart: unless-stopped
+    networks:
+      - minemeets-network
+
+volumes:
+  whisper-cache:
+
+networks:
+  minemeets-network:
+    driver: bridge

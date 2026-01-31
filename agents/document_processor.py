@@ -1,56 +1,55 @@
 # agents/document_processor.py
 import os
 import logging
+import re
 from typing import Dict, Any, List, Optional
 from pathlib import Path
-
-# LangChain imports for document processing
-from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader, TextLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter, MarkdownTextSplitter
-from langchain_core.documents import Document
+import PyPDF2
+import docx
 
 logger = logging.getLogger(__name__)
 
+
+class DocumentChunk:
+    """Represents a document chunk with text and metadata."""
+    
+    def __init__(self, text: str, metadata: Dict[str, Any]):
+        self.page_content = text  # Keep compatible with old code
+        self.text = text
+        self.metadata = metadata
+
+
 class DocumentProcessor:
-    """Enhanced document processor using LangChain loaders and splitters."""
+    """Production document processor with deterministic chunking."""
 
-    def __init__(self):
-        # Configure text splitters
-        self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200,
-            length_function=len,
-            is_separator_regex=False,
-            separators=[
-                "\n\n",  # Double newlines (paragraphs)
-                "\n",    # Single newlines
-                ". ",    # Sentences
-                "! ",    # Exclamation sentences
-                "? ",    # Question sentences
-                "; ",    # Semi-colon sentences
-                ": ",    # Colon sentences
-                ", ",    # Commas
-                " ",     # Words
-                "",      # Characters
-            ]
-        )
-
-        # Markdown splitter for structured content
-        self.markdown_splitter = MarkdownTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200
-        )
+    def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 200):
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
+        
+        # Separators in order of preference
+        self.separators = [
+            "\n\n",  # Double newlines (paragraphs)
+            "\n",    # Single newlines
+            ". ",    # Sentences
+            "! ",    # Exclamation sentences
+            "? ",    # Question sentences
+            "; ",    # Semi-colon sentences
+            ": ",    # Colon sentences
+            ", ",    # Commas
+            " ",     # Words
+            "",      # Characters
+        ]
 
         # Supported file extensions
         self.supported_extensions = {
-            '.pdf': PyPDFLoader,
-            '.docx': Docx2txtLoader,
-            '.txt': TextLoader,
-            '.md': TextLoader,  # Markdown treated as text
+            '.pdf': self._load_pdf,
+            '.docx': self._load_docx,
+            '.txt': self._load_text,
+            '.md': self._load_text,
         }
 
-    def load_and_split_document(self, file_path: str, metadata: Optional[Dict[str, Any]] = None) -> List[Document]:
-        """Load a document and split it into chunks using LangChain."""
+    def load_and_split_document(self, file_path: str, metadata: Optional[Dict[str, Any]] = None) -> List[DocumentChunk]:
+        """Load a document and split it into chunks."""
         try:
             file_path = Path(file_path)
             if not file_path.exists():
@@ -62,146 +61,226 @@ class DocumentProcessor:
                 raise ValueError(f"Unsupported file type: {extension}")
 
             # Load document using appropriate loader
-            loader_class = self.supported_extensions[extension]
-            loader = loader_class(str(file_path))
-            documents = loader.load()
+            loader_func = self.supported_extensions[extension]
+            text = loader_func(str(file_path))
 
-            if not documents:
+            if not text:
                 logger.warning(f"No content found in {file_path}")
                 return []
 
-            # Add metadata to all documents
-            if metadata:
-                for doc in documents:
-                    doc.metadata.update(metadata)
-
-            # Split documents into chunks
-            if extension == '.md':
-                # Use markdown splitter for markdown files
-                split_docs = self.markdown_splitter.split_documents(documents)
-            else:
-                # Use recursive character splitter for other formats
-                split_docs = self.text_splitter.split_documents(documents)
-
-            # Add chunk-specific metadata
-            for i, chunk in enumerate(split_docs):
-                chunk.metadata.update({
+            # Split into chunks
+            chunks = self._split_text(text)
+            
+            # Create document chunks with metadata
+            doc_chunks = []
+            base_metadata = metadata or {}
+            for i, chunk_text in enumerate(chunks):
+                chunk_metadata = {
+                    **base_metadata,
                     "chunk_id": f"{file_path.stem}_chunk_{i}",
                     "chunk_index": i,
                     "source_file": str(file_path),
                     "file_extension": extension,
-                    "total_chunks": len(split_docs)
-                })
+                    "total_chunks": len(chunks)
+                }
+                doc_chunks.append(DocumentChunk(chunk_text, chunk_metadata))
 
-            logger.info(f"Processed {file_path} into {len(split_docs)} chunks")
-            return split_docs
+            logger.info(f"Processed {file_path} into {len(doc_chunks)} chunks")
+            return doc_chunks
 
         except Exception as e:
             logger.error(f"Error processing document {file_path}: {str(e)}")
             raise
 
-    def load_and_split_text(self, text: str, metadata: Optional[Dict[str, Any]] = None) -> List[Document]:
-        """Split raw text into chunks using LangChain."""
+    def load_and_split_text(self, text: str, metadata: Optional[Dict[str, Any]] = None) -> List[DocumentChunk]:
+        """Split raw text into chunks."""
         try:
             if not text or not text.strip():
                 logger.warning("Empty text provided for processing")
                 return []
 
-            # Create a document from text
-            document = Document(page_content=text, metadata=metadata or {})
-
             # Split into chunks
-            split_docs = self.text_splitter.split_documents([document])
-
-            # Add chunk-specific metadata
-            for i, chunk in enumerate(split_docs):
-                chunk.metadata.update({
+            chunks = self._split_text(text)
+            
+            # Create document chunks with metadata
+            doc_chunks = []
+            base_metadata = metadata or {}
+            for i, chunk_text in enumerate(chunks):
+                chunk_metadata = {
+                    **base_metadata,
                     "chunk_id": f"text_chunk_{i}",
                     "chunk_index": i,
                     "source_type": "raw_text",
-                    "total_chunks": len(split_docs)
-                })
+                    "total_chunks": len(chunks)
+                }
+                doc_chunks.append(DocumentChunk(chunk_text, chunk_metadata))
 
-            logger.info(f"Split text into {len(split_docs)} chunks")
-            return split_docs
+            logger.info(f"Split text into {len(doc_chunks)} chunks")
+            return doc_chunks
 
         except Exception as e:
             logger.error(f"Error processing text: {str(e)}")
             raise
 
-    def load_pdf_with_metadata(self, file_path: str, metadata: Optional[Dict[str, Any]] = None) -> List[Document]:
-        """Load PDF with enhanced metadata extraction."""
-        try:
-            file_path = Path(file_path)
-            loader = PyPDFLoader(str(file_path))
-            documents = loader.load()
-
-            # Extract PDF-specific metadata
-            pdf_metadata = {
-                "total_pages": len(documents),
-                "file_size": file_path.stat().st_size,
-                "file_modified": file_path.stat().st_mtime
-            }
-
-            # Add metadata to documents
-            for i, doc in enumerate(documents):
-                doc.metadata.update({
-                    "page_number": i + 1,
-                    "page_content_length": len(doc.page_content),
-                    **pdf_metadata,
-                    **(metadata or {})
-                })
-
-            return documents
-
-        except Exception as e:
-            logger.error(f"Error loading PDF {file_path}: {str(e)}")
-            raise
-
-    def create_meeting_chunks(self, transcript: str, meeting_metadata: Dict[str, Any]) -> List[Document]:
+    def create_meeting_chunks(self, transcript: str, meeting_metadata: Dict[str, Any]) -> List[DocumentChunk]:
         """Create optimized chunks for meeting transcripts."""
         try:
-            # Use smaller chunks for meetings to preserve conversational context
-            meeting_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=800,  # Smaller chunks for conversations
-                chunk_overlap=150,
-                length_function=len,
-                separators=[
-                    "\n\n",  # Speaker turns
-                    ". ",    # Sentences
-                    "! ", "? ", "; ",
-                    ", ", " ", ""
-                ]
-            )
-
-            # Create document with meeting metadata
-            document = Document(
-                page_content=transcript,
-                metadata={
-                    "meeting_id": meeting_metadata.get("id"),
-                    "type": "meeting_transcript",
-                    **meeting_metadata
-                }
-            )
-
-            # Split and enhance metadata
-            chunks = meeting_splitter.split_documents([document])
-
-            for i, chunk in enumerate(chunks):
-                chunk.metadata.update({
+            # Split with meeting-specific settings
+            chunk_size_backup = self.chunk_size
+            overlap_backup = self.chunk_overlap
+            
+            self.chunk_size = 800  # Smaller chunks for conversations
+            self.chunk_overlap = 150
+            
+            chunks = self._split_text(transcript)
+            
+            # Restore original settings
+            self.chunk_size = chunk_size_backup
+            self.chunk_overlap = overlap_backup
+            
+            # Create document chunks with meeting metadata
+            doc_chunks = []
+            for i, chunk_text in enumerate(chunks):
+                chunk_metadata = {
                     "chunk_id": f"{meeting_metadata.get('id', 'meeting')}_transcript_chunk_{i}",
                     "chunk_index": i,
                     "chunk_type": "transcript",
+                    "meeting_id": meeting_metadata.get("id"),
+                    "type": "meeting_transcript",
                     "position": i,
-                    "total_chunks": len(chunks)
-                })
+                    "total_chunks": len(chunks),
+                    **meeting_metadata
+                }
+                doc_chunks.append(DocumentChunk(chunk_text, chunk_metadata))
 
-            logger.info(f"Created {len(chunks)} meeting transcript chunks")
-            return chunks
+            logger.info(f"Created {len(doc_chunks)} meeting transcript chunks")
+            return doc_chunks
 
         except Exception as e:
             logger.error(f"Error creating meeting chunks: {str(e)}")
             raise
+
+    def _load_pdf(self, file_path: str) -> str:
+        """Load text from PDF file."""
+        try:
+            with open(file_path, 'rb') as file:
+                reader = PyPDF2.PdfReader(file)
+                text = []
+                for page in reader.pages:
+                    text.append(page.extract_text())
+                return "\n\n".join(text)
+        except Exception as e:
+            logger.error(f"Error loading PDF {file_path}: {str(e)}")
+            raise
+
+    def _load_docx(self, file_path: str) -> str:
+        """Load text from DOCX file."""
+        try:
+            doc = docx.Document(file_path)
+            return "\n\n".join([paragraph.text for paragraph in doc.paragraphs])
+        except Exception as e:
+            logger.error(f"Error loading DOCX {file_path}: {str(e)}")
+            raise
+
+    def _load_text(self, file_path: str) -> str:
+        """Load text from plain text file."""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as file:
+                return file.read()
+        except Exception as e:
+            logger.error(f"Error loading text file {file_path}: {str(e)}")
+            raise
+
+    def _split_text(self, text: str) -> List[str]:
+        """Split text into chunks using recursive character splitting."""
+        if not text:
+            return []
+        
+        chunks = []
+        self._recursive_split(text, chunks)
+        return [c for c in chunks if c.strip()]  # Filter empty chunks
+
+    def _recursive_split(self, text: str, chunks: List[str], separator_index: int = 0) -> None:
+        """Recursively split text using separators in order of preference."""
+        if not text or not text.strip():
+            return
+
+        # If text is already smaller than chunk size, add it
+        if len(text) <= self.chunk_size:
+            chunks.append(text.strip())
+            return
+
+        # Try current separator
+        if separator_index >= len(self.separators):
+            # Reached end of separators, force split at chunk_size
+            chunks.append(text[:self.chunk_size].strip())
+            if len(text) > self.chunk_size:
+                self._recursive_split(text[self.chunk_size - self.chunk_overlap:], chunks, 0)
+            return
+
+        separator = self.separators[separator_index]
+        
+        # Split by separator
+        if separator:
+            splits = text.split(separator)
+        else:
+            # Character-level split
+            splits = [text[i:i+self.chunk_size] for i in range(0, len(text), self.chunk_size)]
+
+        # If we got only one split, try next separator
+        if len(splits) == 1:
+            self._recursive_split(text, chunks, separator_index + 1)
+            return
+
+        # Group splits into chunks
+        current_chunk = []
+        current_size = 0
+
+        for split in splits:
+            split_size = len(split) + len(separator)
+            
+            if current_size + split_size > self.chunk_size and current_chunk:
+                # Save current chunk
+                chunk_text = separator.join(current_chunk)
+                if chunk_text.strip():
+                    chunks.append(chunk_text.strip())
+                
+                # Start new chunk with overlap
+                if len(chunk_text) > self.chunk_overlap:
+                    overlap_text = chunk_text[-self.chunk_overlap:]
+                    current_chunk = [overlap_text] if overlap_text.strip() else []
+                    current_size = len(overlap_text)
+                else:
+                    current_chunk = []
+                    current_size = 0
+
+            current_chunk.append(split)
+            current_size += split_size
+
+        # Add remaining chunk
+        if current_chunk:
+            chunk_text = separator.join(current_chunk).strip()
+            if chunk_text:
+                chunks.append(chunk_text)
+
+    def split_text_simple(self, text: str, meeting_id: str = "", chunk_id_prefix: str = "") -> List[Dict[str, Any]]:
+        """Simple text splitting for backward compatibility."""
+        chunks = self._split_text(text)
+        
+        result = []
+        for i, chunk_text in enumerate(chunks):
+            result.append({
+                "text": chunk_text,
+                "metadata": {
+                    "chunk_id": f"{chunk_id_prefix}_{i}" if chunk_id_prefix else f"chunk_{i}",
+                    "chunk_index": i,
+                    "meeting_id": meeting_id,
+                    "type": "text",
+                    "total_chunks": len(chunks)
+                }
+            })
+        
+        return result
 
     def validate_document(self, file_path: str) -> Dict[str, Any]:
         """Validate document and return metadata."""
