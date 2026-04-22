@@ -1,6 +1,7 @@
 """
 Unit tests for document processor
 """
+
 import pytest
 from agents.document_processor import DocumentProcessor
 
@@ -16,7 +17,7 @@ class TestDocumentProcessor:
         """Test simple text splitting."""
         text = "This is a test. " * 20  # 80 words
         chunks = self.processor._split_text(text)
-        
+
         assert len(chunks) > 0
         assert all(isinstance(chunk, str) for chunk in chunks)
         assert all(len(chunk) <= self.processor.chunk_size for chunk in chunks)
@@ -30,7 +31,7 @@ class TestDocumentProcessor:
         """Test that chunks have proper metadata."""
         text = "Test content"
         result = self.processor.split_text_simple(text, meeting_id="test_meeting")
-        
+
         assert len(result) > 0
         assert "text" in result[0]
         assert "metadata" in result[0]
