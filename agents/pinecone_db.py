@@ -16,6 +16,7 @@ class PineconeDB:
         if not self.api_key:
             raise ValueError("PINECONE_API_KEY must be set")
         self.index_name = index_name
+        self.embedding_dim = int(os.getenv("EMBEDDING_DIM", "512"))
         self.pc = Pinecone(api_key=self.api_key)
 
         # Check if index exists, create if not
@@ -24,7 +25,7 @@ class PineconeDB:
             logger.info(f"Creating new Pinecone index: {self.index_name}")
             self.pc.create_index(
                 name=self.index_name,
-                dimension=512,  # CLIP ViT-B/32 dimension
+                dimension=self.embedding_dim,
                 metric="cosine",
                 spec=ServerlessSpec(cloud="aws", region="us-west-2"),
             )
@@ -39,11 +40,27 @@ class PineconeDB:
 
     def embed_text(self, text: str) -> List[float]:
         """Generate embedding for a single text."""
-        return self.embedding_model.encode([text])[0].tolist()
+        embedding = self.embedding_model.encode([text])[0].tolist()
+        self._validate_embedding_dimension(embedding)
+        return embedding
 
     def embed_texts(self, texts: List[str]) -> List[List[float]]:
         """Generate embeddings for multiple texts."""
-        return self.embedding_model.encode(texts).tolist()
+        embeddings = self.embedding_model.encode(texts).tolist()
+        for embedding in embeddings:
+            self._validate_embedding_dimension(embedding)
+        return embeddings
+
+    def _validate_embedding_dimension(self, embedding: List[float]) -> None:
+        """Guardrail for embedding integrity before upsert."""
+        if len(embedding) != self.embedding_dim:
+            raise ValueError(
+                f"Invalid embedding dimension: got {len(embedding)}, expected {self.embedding_dim}"
+            )
+
+    def _build_vector_id(self, metadata: Dict[str, Any], namespace: str, fallback_id: str) -> str:
+        """Deterministic vector IDs to keep re-ingestion idempotent."""
+        return metadata.get("chunk_id") or metadata.get("id") or f"{namespace}_{fallback_id}"
 
     def upsert_documents(self, documents: List[Dict[str, Any]], namespace: str = "") -> None:
         """Upsert text documents with embeddings."""
@@ -64,10 +81,12 @@ class PineconeDB:
 
                 # Prepare metadata
                 metadata = doc.get("metadata", {})
+                metadata["meeting_id"] = metadata.get("meeting_id") or namespace
+                metadata["type"] = metadata.get("type", "text_chunk")
                 metadata["text"] = text  # Store text in metadata for retrieval
 
                 # Create vector with unique ID
-                vector_id = f"{namespace}_{i}" if namespace else f"doc_{i}"
+                vector_id = self._build_vector_id(metadata, namespace, f"doc_{i}")
                 vectors.append({"id": vector_id, "values": embedding, "metadata": metadata})
 
             if vectors:
@@ -98,6 +117,8 @@ class PineconeDB:
             batch_size = 100
             for i in range(0, len(vectors), batch_size):
                 batch = vectors[i : i + batch_size]
+                for vector in batch:
+                    self._validate_embedding_dimension(vector.get("values", []))
                 self.index.upsert(vectors=batch, namespace=namespace)
 
             logger.info(f"Successfully upserted {len(vectors)} vectors to namespace '{namespace}'")

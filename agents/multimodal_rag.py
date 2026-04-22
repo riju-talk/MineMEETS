@@ -177,7 +177,12 @@ class MultimodalRAGChain:
         self.llm = LLM(model=llm_model, temperature=0.1)
         self.retriever = MultimodalRetriever(pinecone_db)
 
-    async def query(self, question: str, meeting_id: Optional[str] = None) -> Dict[str, Any]:
+    async def query(
+        self,
+        question: str,
+        meeting_id: Optional[str] = None,
+        overlay_instructions: str = "",
+    ) -> Dict[str, Any]:
         """Query the multimodal RAG system."""
         try:
             if not meeting_id:
@@ -206,7 +211,12 @@ class MultimodalRAGChain:
             context_text = self._format_context(modality_contexts)
 
             # Create prompt
-            prompt = self._create_prompt(context_text, question, modality_contexts)
+            prompt = self._create_prompt(
+                context_text,
+                question,
+                modality_contexts,
+                overlay_instructions=overlay_instructions,
+            )
 
             # Generate answer
             answer = await self.llm.generate_async(prompt)
@@ -286,15 +296,28 @@ class MultimodalRAGChain:
         return "\n\n=== MODALITY SEPARATOR ===\n\n".join(sections)
 
     def _create_prompt(
-        self, context: str, question: str, modality_contexts: Dict[str, List[Dict]]
+        self,
+        context: str,
+        question: str,
+        modality_contexts: Dict[str, List[Dict]],
+        overlay_instructions: str = "",
     ) -> str:
         """Create prompt for LLM."""
         modality_info = {k: f"{len(v)} items" for k, v in modality_contexts.items() if v}
+
+        overlay_block = (
+            overlay_instructions.strip()
+            if overlay_instructions and overlay_instructions.strip()
+            else "No overlay customization provided."
+        )
 
         return f"""You are an intelligent meeting assistant analyzing multimodal content.
 
 AVAILABLE MODALITIES: {', '.join(modality_info.keys())}
 {', '.join([f"{k}: {v}" for k, v in modality_info.items()])}
+
+ASSISTANT OVERLAY CONFIG:
+{overlay_block}
 
 MEETING CONTEXT:
 {context}

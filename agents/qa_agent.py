@@ -50,9 +50,14 @@ Please provide any potentially relevant information from the meeting, or explain
         """Enhanced QA processing using multimodal RAG."""
         try:
             meeting_id = context.get("meeting_id") if context else None
+            overlay_instructions = context.get("overlay_instructions", "") if context else ""
 
             # Use multimodal RAG for enhanced responses
-            multimodal_response = await self.multimodal_rag.query(question, meeting_id)
+            multimodal_response = await self.multimodal_rag.query(
+                question,
+                meeting_id,
+                overlay_instructions=overlay_instructions,
+            )
 
             if multimodal_response["success"]:
                 return {

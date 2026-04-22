@@ -3,6 +3,7 @@ from typing import Dict, Any, List, Optional, Union
 from datetime import datetime, timezone
 import os
 import asyncio
+from pathlib import Path
 import PyPDF2
 import docx
 from agents.audio_agent import AudioAgent
@@ -102,10 +103,19 @@ class MeetingCoordinator:
                 f"Successfully processed meeting {meeting_id} with {len(processing_result['chunks'])} chunks"
             )
 
+            # Store text/audio chunks in Pinecone (image vectors are already upserted in _process_image).
+            # GenX translation: no vectors, no retriever, no answer... that's a hard nope.
+            if processing_result["chunks"]:
+                self.pinecone_db.upsert_documents(
+                    processing_result["chunks"],
+                    namespace=meeting_id,
+                )
+
             return {
                 "meeting_id": meeting_id,
                 "status": "processed",
                 "chunks_processed": len(processing_result["chunks"]),
+                "chunk_count": len(processing_result["chunks"]),
                 "processing_time": meeting_meta["processing_time"],
                 "content_type": meeting_data.get("type"),
             }
@@ -127,7 +137,7 @@ class MeetingCoordinator:
             if field not in meeting_data:
                 raise ValueError(f"Missing required field: {field}")
 
-        valid_types = ["transcript", "file", "audio", "image"]
+        valid_types = ["transcript", "file", "text", "audio", "image"]
         if meeting_data.get("type") not in valid_types:
             raise ValueError(f"Invalid meeting type. Must be one of: {valid_types}")
 
@@ -151,6 +161,8 @@ class MeetingCoordinator:
         if content_type == "transcript":
             return await self._process_transcript(meeting_data, meeting_id)
         elif content_type == "file":
+            return await self._process_file(meeting_data, meeting_id)
+        elif content_type == "text":
             return await self._process_file(meeting_data, meeting_id)
         elif content_type == "audio":
             return await self._process_audio(meeting_data, meeting_id)

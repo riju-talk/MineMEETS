@@ -7,7 +7,7 @@ import os
 import asyncio
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, Tuple
 import gradio as gr
 from dotenv import load_dotenv
 import logging
@@ -92,15 +92,15 @@ def process_text_file(file) -> str:
         if file is None:
             return "❌ No file uploaded"
 
-        meeting_id, saved_path = save_uploaded_file(file.name, "text")
+        meeting_id, saved_path = save_uploaded_file(file.name, "file")
         if not saved_path:
             return "❌ Failed to save file"
 
         # Run async processing
-        result = asyncio.run(process_meeting_async(saved_path, "text", meeting_id))
+        result = asyncio.run(process_meeting_async(saved_path, "file", meeting_id))
 
         if result.get("status") == "processed":
-            chunk_count = result.get("chunk_count", 0)
+            chunk_count = result.get("chunk_count", result.get("chunks_processed", 0))
             return f"✅ Text processed successfully!\n\nMeeting ID: {meeting_id}\nChunks created: {chunk_count}"
         else:
             error = result.get("error", "Unknown error")
@@ -160,7 +160,32 @@ def process_image_file(file) -> str:
         return f"❌ Error: {str(e)}"
 
 
-def ask_question(meeting_id: str, question: str) -> str:
+def build_overlay_instructions(
+    assistant_name: str,
+    response_style: str,
+    preferred_language: str,
+    output_template: str,
+) -> str:
+    """Build assistant overlay instructions for persona + response shape.
+
+    Yes, this is the future "overlay node" payload. AWWW my GAWWD, it's modular.
+    """
+    return (
+        f"assistant_name={assistant_name or 'MineMEETS Assistant'}\n"
+        f"response_style={response_style or 'Clear and concise'}\n"
+        f"preferred_language={preferred_language or 'English'}\n"
+        f"output_template={output_template or 'default'}"
+    )
+
+
+def ask_question(
+    meeting_id: str,
+    question: str,
+    assistant_name: str,
+    response_style: str,
+    preferred_language: str,
+    output_template: str,
+) -> str:
     """Ask a question about a meeting."""
     try:
         if not meeting_id or not meeting_id.strip():
@@ -170,15 +195,32 @@ def ask_question(meeting_id: str, question: str) -> str:
             return "❌ Please enter a question"
 
         # Run async Q&A
+        overlay_instructions = build_overlay_instructions(
+            assistant_name,
+            response_style,
+            preferred_language,
+            output_template,
+        )
         result = asyncio.run(
-            coordinator.qa_agent.process(question, context={"meeting_id": meeting_id})
+            coordinator.qa_agent.process(
+                question,
+                context={
+                    "meeting_id": meeting_id,
+                    "overlay_instructions": overlay_instructions,
+                },
+            )
         )
 
         if result.get("success"):
             answer = result.get("content", {}).get("answer", "")
             sources = result.get("content", {}).get("sources", [])
 
-            response = f"**Answer:**\n{answer}\n\n"
+            response = f"## Answer\n{answer}\n\n"
+
+            response += "### Assistant Overlay\n"
+            response += f"- Name: {assistant_name or 'MineMEETS Assistant'}\n"
+            response += f"- Style: {response_style or 'Clear and concise'}\n"
+            response += f"- Language: {preferred_language or 'English'}\n"
 
             if sources:
                 response += f"**Sources:** {len(sources)} contexts retrieved\n"
@@ -248,18 +290,31 @@ def get_database_stats() -> str:
 def create_interface():
     """Create Gradio interface."""
 
-    with gr.Blocks(title="MineMEETS - MLOps Meeting Intelligence", theme=gr.themes.Soft()) as app:
-        gr.Markdown("""
-        # 🎯 MineMEETS — Multimodal RAG Meeting Intelligence
-        
-        **Production MLOps Platform** for processing and querying meeting content across text, audio, and images.
+    custom_css = """
+    .hero-card {border-radius: 14px; padding: 14px; background: linear-gradient(135deg,#15192b,#232b4a); color: #f3f5ff;}
+    .stat-chip {display:inline-block; padding:6px 10px; border-radius: 20px; background:#f0f4ff; margin: 4px;}
+    """
+
+    with gr.Blocks(
+        title="MineMEETS - MLOps Meeting Intelligence",
+        theme=gr.themes.Soft(),
+        css=custom_css,
+    ) as app:
+        gr.Markdown(
+            """
+        <div class="hero-card">
+        <h1>🎯 MineMEETS — Multimodal RAG Meeting Intelligence</h1>
+        <p><b>Production MLOps Platform</b> for processing and querying meeting content across text, audio, and images.</p>
+        <p>"Use the Force, but verify with sources." — definitely from the Director's Cut.</p>
+        </div>
         
         ### How to Use:
         1. **Upload** your meeting files (text transcripts, audio recordings, or images)
         2. **Process** each file to extract and embed content
         3. **Copy** the Meeting ID from the success message
         4. **Ask questions** using the Meeting ID in the Q&A tab
-        """)
+        """
+        )
 
         with gr.Tabs():
             # ========== Upload & Process Tab ==========
@@ -316,6 +371,36 @@ def create_interface():
                         lines=3,
                     )
 
+                gr.Markdown("### 🤖 Assistant Overlay (PA-ready nodes)")
+                with gr.Row():
+                    assistant_name_input = gr.Textbox(
+                        label="Assistant Name",
+                        value="MineMEETS Assistant",
+                        info="PA overlay node: identity",
+                    )
+                    preferred_language_input = gr.Textbox(
+                        label="Preferred Language",
+                        value="English",
+                        info="PA overlay node: language",
+                    )
+
+                with gr.Row():
+                    response_style_input = gr.Dropdown(
+                        label="Response Style",
+                        choices=[
+                            "Clear and concise",
+                            "Executive summary",
+                            "Action-items first",
+                            "Detailed analyst mode",
+                        ],
+                        value="Clear and concise",
+                    )
+                    output_template_input = gr.Textbox(
+                        label="Output Template",
+                        placeholder="e.g. summary|decisions|risks|next_steps",
+                        info="PA overlay node: output schema",
+                    )
+
                 with gr.Row():
                     ask_btn = gr.Button("Ask Question", variant="primary", size="lg")
                     summary_btn = gr.Button("Get Meeting Summary", variant="secondary")
@@ -323,20 +408,31 @@ def create_interface():
                 answer_output = gr.Markdown(label="Answer")
 
                 ask_btn.click(
-                    ask_question, inputs=[meeting_id_input, question_input], outputs=[answer_output]
+                    ask_question,
+                    inputs=[
+                        meeting_id_input,
+                        question_input,
+                        assistant_name_input,
+                        response_style_input,
+                        preferred_language_input,
+                        output_template_input,
+                    ],
+                    outputs=[answer_output],
                 )
 
                 summary_btn.click(
                     get_meeting_summary, inputs=[meeting_id_input], outputs=[answer_output]
                 )
 
-                gr.Markdown("""
+                gr.Markdown(
+                    """
                 ### Example Questions:
                 - What were the main topics discussed?
                 - What decisions were made?
                 - Who spoke about [topic]?
                 - What action items were identified?
-                """)
+                """
+                )
 
             # ========== Database Stats Tab ==========
             with gr.Tab("📊 Database Stats"):
@@ -350,10 +446,12 @@ def create_interface():
                 # Load stats on startup
                 app.load(get_database_stats, outputs=[stats_output])
 
-        gr.Markdown("""
+        gr.Markdown(
+            """
         ---
         **MineMEETS** — Built with MLOps best practices | [GitHub](https://github.com/yourusername/MineMEETS)
-        """)
+        """
+        )
 
     return app
 
