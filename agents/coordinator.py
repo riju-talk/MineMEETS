@@ -3,6 +3,7 @@ from typing import Dict, Any, List, Optional, Union
 from datetime import datetime, timezone
 import os
 import asyncio
+from pathlib import Path
 import PyPDF2
 import docx
 from agents.audio_agent import AudioAgent
@@ -102,10 +103,19 @@ class MeetingCoordinator:
                 f"Successfully processed meeting {meeting_id} with {len(processing_result['chunks'])} chunks"
             )
 
+            # Store text/audio chunks in Pinecone (image vectors are already upserted in _process_image).
+            # GenX translation: no vectors, no retriever, no answer... that's a hard nope.
+            if processing_result["chunks"]:
+                self.pinecone_db.upsert_documents(
+                    processing_result["chunks"],
+                    namespace=meeting_id,
+                )
+
             return {
                 "meeting_id": meeting_id,
                 "status": "processed",
                 "chunks_processed": len(processing_result["chunks"]),
+                "chunk_count": len(processing_result["chunks"]),
                 "processing_time": meeting_meta["processing_time"],
                 "content_type": meeting_data.get("type"),
             }
